@@ -1,0 +1,72 @@
+# Python 字节码与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 环境变量与敏感配置
+.env
+.env.*
+!.env.example
+
+# 测试、类型检查与代码检查缓存
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# 构建与发布产物
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# 日志与临时文件
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# 数据库和本地运行数据
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE 配置
+.vscode/
+.idea/
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Codex / Agent 本地工作目录
+.agents/
+
+# 本地密钥、证书和凭证
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
