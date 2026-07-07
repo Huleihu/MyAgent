@@ -18,7 +18,8 @@
 2. Agentic RAG 设计文档；
 3. RAG 数据模型；
 4. Markdown 文档解析与 ParserRegistry；
-5. TextChunker 文档切分。
+5. TextChunker 文档切分；
+6. Chunk 向量化与内存向量索引。
 ```
 
 ## 2. 已完成内容
@@ -310,6 +311,49 @@ chunks:
 - Chunker 不做 Embedding；
 - Chunker 不写索引。
 
+### 2.10 Chunk 向量化与内存向量索引
+
+文件：
+
+```text
+my_agent/rag/embedding.py
+my_agent/rag/index.py
+tests/test_rag_index.py
+```
+
+完成：
+
+- `SimpleEmbeddingModel`
+- `InMemoryChunkIndex`
+- `keyword_search(query, top_k)`
+- `vector_search(query, top_k)`
+
+Embedding 规则：
+
+- 使用确定性词袋，不使用随机向量；
+- 英文按单词分词；
+- 中文按单字分词；
+- 统一转小写；
+- 使用词频构造稀疏向量；
+- 使用 cosine similarity 计算向量相似度。
+
+Index 行为：
+
+- `add_chunks(chunks)` 对每个 `Chunk` 生成 embedding 并存入内存；
+- `keyword_search(query, top_k)` 按 query token 覆盖率返回 `RetrievedChunk`；
+- `vector_search(query, top_k)` 按 query embedding 与 Chunk embedding 的余弦相似度返回 `RetrievedChunk`；
+- `top_k` 必须是正整数；
+- 空 query 会被拒绝；
+- 返回结果会保留 `keyword_score`、`vector_score`、`final_score`。
+
+边界：
+
+- Embedding 模块只负责文本向量化和相似度计算；
+- Index 模块只负责内存保存、基础召回和排序；
+- Index 不负责混合召回融合、重排和引用构造；
+- 不依赖真实 Embedding 服务；
+- 不依赖外部向量数据库。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -349,6 +393,15 @@ TextChunker
         |
         v
 list[Chunk]
+        |
+        v
+SimpleEmbeddingModel
+        |
+        v
+InMemoryChunkIndex
+        |
+        v
+keyword_search / vector_search
 ```
 
 ## 4. 当前提交历史
@@ -361,12 +414,13 @@ b2a4fa0 新增工具注册表
 5005229 新增工具执行器
 f6a77de 新增Agentic RAG设计文档与数据模型
 cf589cc 新增Markdown文档解析器
+7d90f10 新增文本切分器
 ```
 
-当前 Chunker 代码还未提交，建议提交信息：
+当前 Chunk 向量化与内存向量索引代码已完成，建议提交信息：
 
 ```text
-新增文本切分器
+新增Chunk向量化与内存索引
 ```
 
 ## 5. 测试与环境
@@ -394,7 +448,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 41 tests in 0.002s
+Ran 47 tests in 0.002s
 OK
 ```
 
@@ -411,9 +465,9 @@ Agentic RAG 后续按以下粒度推进：
 ```text
 1. RAG 数据模型：已完成
 2. 文档解析 Parser：已完成
-3. Chunk 切分：当前完成，待提交
-4. Chunk 向量化与内存向量索引
-5. 混合召回、重排和引用构造
+3. Chunk 切分：已完成
+4. Chunk 向量化与内存向量索引：已完成
+5. 混合召回、重排和引用构造：下一步
 6. RetrievalTool
 7. RAG Trace 与 Retrieval Test
 ```
@@ -421,18 +475,20 @@ Agentic RAG 后续按以下粒度推进：
 下一步建议实现：
 
 ```text
-my_agent/rag/embedding.py
-my_agent/rag/index.py
-tests/test_rag_index.py
+my_agent/rag/retriever.py
+my_agent/rag/reranker.py
+my_agent/rag/citation.py
+tests/test_rag_retriever.py
 ```
 
 下一步目标：
 
-- `SimpleEmbeddingModel` 使用确定性词袋，不使用随机向量；
-- `InMemoryChunkIndex.add_chunks(chunks)` 对每个 Chunk 生成 embedding 并存入内存；
-- 支持 `keyword_search(query, top_k)`；
-- 支持 `vector_search(query, top_k)`；
-- 返回 `RetrievedChunk`，保留 keyword_score、vector_score、final_score。
+- `HybridRetriever.retrieve(query, top_k)` 合并 keyword 与 vector 两路召回；
+- 使用 `final_score = keyword_weight * keyword_score + vector_weight * vector_score`；
+- 默认权重建议 `keyword_weight = 0.4`，`vector_weight = 0.6`；
+- `SimpleReranker` 只负责重排，不负责召回；
+- `CitationBuilder` 只负责把 `RetrievedChunk` 转成可返回的引用数据；
+- 保持 Retriever、Reranker、CitationBuilder 与 ToolExecutor 解耦。
 
 ## 7. 开发约束
 
@@ -469,6 +525,10 @@ Tool 框架可这样讲：
 Chunk 切分可这样讲：
 
 > Parser 只负责把不同文件格式转成标准 Document，Chunker 只负责把 Document 切成带 metadata 的 Chunk。Chunker 支持 overlap，通过 `chunk_size - overlap` 控制下一块起点，避免答案跨 chunk 边界时丢上下文。
+
+向量索引可这样讲：
+
+> 我先实现了一个确定性的 `SimpleEmbeddingModel`，用词袋和词频构造稀疏向量，避免随机向量导致测试不可复现。`InMemoryChunkIndex` 只保存 Chunk 和预计算 embedding，并提供关键词召回与向量召回两种基础能力；混合融合、重排和引用构造会放在后续独立模块里，避免索引层承担过多职责。
 
 Agentic RAG 可这样讲：
 
