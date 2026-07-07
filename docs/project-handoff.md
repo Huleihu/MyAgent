@@ -17,7 +17,8 @@
 1. Tool Calling 框架 MVP；
 2. Agentic RAG 设计文档；
 3. RAG 数据模型；
-4. Markdown 文档解析与 ParserRegistry。
+4. Markdown 文档解析与 ParserRegistry；
+5. TextChunker 文档切分。
 ```
 
 ## 2. 已完成内容
@@ -257,6 +258,58 @@ ParserRegistry 支持：
 Chunker、Retriever、ToolExecutor 不需要知道原始文件格式。
 ```
 
+### 2.9 TextChunker 文档切分
+
+文件：
+
+```text
+my_agent/rag/chunker.py
+tests/test_rag_chunker.py
+```
+
+完成：
+
+- `TextChunker`
+- `split(document)`
+- `split_many(documents)`
+- 支持 `chunk_size`
+- 支持 `overlap`
+- `chunk_id = {doc_id}:{index}`
+- `Chunk.metadata` 继承 `Document.metadata`
+- `Chunk.metadata` 补充：
+  - `source`
+  - `title`
+  - `chunk_index`
+
+overlap 实现方式：
+
+```text
+step_size = chunk_size - overlap
+下一块起点 = 当前起点 + step_size
+```
+
+示例：
+
+```text
+content = abcdefghijklmnopqrstuvwxyz
+chunk_size = 10
+overlap = 3
+
+chunks:
+  abcdefghij
+  hijklmnopq
+  opqrstuvwx
+  vwxyz
+```
+
+边界：
+
+- Chunker 只接收标准 `Document`；
+- Chunker 不读取文件；
+- Chunker 不解析 Markdown / PDF / Word；
+- Chunker 不做 Embedding；
+- Chunker 不写索引。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -277,7 +330,7 @@ ToolExecutor.execute(request)
 ToolCallResult(success, data, error, duration_ms)
 ```
 
-RAG 解析链：
+RAG 当前链路：
 
 ```text
 RawDocument
@@ -290,6 +343,12 @@ MarkdownDocumentParser
         |
         v
 list[Document]
+        |
+        v
+TextChunker
+        |
+        v
+list[Chunk]
 ```
 
 ## 4. 当前提交历史
@@ -301,12 +360,13 @@ b2a4fa0 新增工具注册表
 7dfcf0a 新增函数工具包装器
 5005229 新增工具执行器
 f6a77de 新增Agentic RAG设计文档与数据模型
+cf589cc 新增Markdown文档解析器
 ```
 
-当前 Parser 代码还未提交，建议提交信息：
+当前 Chunker 代码还未提交，建议提交信息：
 
 ```text
-新增Markdown文档解析器
+新增文本切分器
 ```
 
 ## 5. 测试与环境
@@ -334,7 +394,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 35 tests in 0.002s
+Ran 41 tests in 0.002s
 OK
 ```
 
@@ -350,9 +410,9 @@ Agentic RAG 后续按以下粒度推进：
 
 ```text
 1. RAG 数据模型：已完成
-2. 文档解析 Parser：当前完成，待提交
-3. Chunk 切分
-4. 确定性 Embedding 与内存索引
+2. 文档解析 Parser：已完成
+3. Chunk 切分：当前完成，待提交
+4. Chunk 向量化与内存向量索引
 5. 混合召回、重排和引用构造
 6. RetrievalTool
 7. RAG Trace 与 Retrieval Test
@@ -361,17 +421,18 @@ Agentic RAG 后续按以下粒度推进：
 下一步建议实现：
 
 ```text
-my_agent/rag/chunker.py
-tests/test_rag_chunker.py
+my_agent/rag/embedding.py
+my_agent/rag/index.py
+tests/test_rag_index.py
 ```
 
-Chunker 目标：
+下一步目标：
 
-- 输入 `Document`；
-- 输出 `Chunk`；
-- 支持 `chunk_size` 和 `overlap`；
-- `Chunk.metadata` 继承 `Document.metadata`；
-- 补充 `source`、`title`、`chunk_index`。
+- `SimpleEmbeddingModel` 使用确定性词袋，不使用随机向量；
+- `InMemoryChunkIndex.add_chunks(chunks)` 对每个 Chunk 生成 embedding 并存入内存；
+- 支持 `keyword_search(query, top_k)`；
+- 支持 `vector_search(query, top_k)`；
+- 返回 `RetrievedChunk`，保留 keyword_score、vector_score、final_score。
 
 ## 7. 开发约束
 
@@ -390,6 +451,7 @@ RAG 阶段额外约束：
 - Document 和 Chunk 必须有 metadata；
 - Parser 只负责把原始文件转成标准 `Document`；
 - Chunker 不关心原始文件格式；
+- Chunker 不负责向量化和索引写入；
 - `retrieval.search` 的 `top_k` 使用 integer，不使用 number；
 - SimpleEmbeddingModel 不允许使用随机向量；
 - Retrieval Test 必须能解释召回失败原因。
@@ -403,6 +465,10 @@ Tool 框架可这样讲：
 文档解析可这样讲：
 
 > 我在 RAG 链路里单独抽象了 Parser 层，用 `RawDocument` 表示原始文件输入，用 `DocumentParser` 定义统一解析接口，再通过 `DocumentParserRegistry` 按扩展名分发到 Markdown、PDF 或 Word 解析器。这样 Chunker 和 Retriever 永远只处理标准 `Document`，不会和具体文件格式耦合。
+
+Chunk 切分可这样讲：
+
+> Parser 只负责把不同文件格式转成标准 Document，Chunker 只负责把 Document 切成带 metadata 的 Chunk。Chunker 支持 overlap，通过 `chunk_size - overlap` 控制下一块起点，避免答案跨 chunk 边界时丢上下文。
 
 Agentic RAG 可这样讲：
 
