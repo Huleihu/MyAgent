@@ -19,7 +19,8 @@
 3. RAG 数据模型；
 4. Markdown 文档解析与 ParserRegistry；
 5. TextChunker 文档切分；
-6. Chunk 向量化与内存向量索引。
+6. Chunk 向量化与内存向量索引；
+7. 混合召回、简单重排与引用构造。
 ```
 
 ## 2. 已完成内容
@@ -354,6 +355,55 @@ Index 行为：
 - 不依赖真实 Embedding 服务；
 - 不依赖外部向量数据库。
 
+### 2.11 混合召回、简单重排与引用构造
+
+文件：
+
+```text
+my_agent/rag/retriever.py
+my_agent/rag/reranker.py
+my_agent/rag/citation.py
+tests/test_rag_retriever.py
+```
+
+完成：
+
+- `HybridRetriever`
+- `SimpleReranker`
+- `CitationBuilder`
+
+HybridRetriever 行为：
+
+- 调用 `InMemoryChunkIndex.keyword_search(query, top_k)` 获取关键词召回；
+- 调用 `InMemoryChunkIndex.vector_search(query, top_k)` 获取向量召回；
+- 按 `chunk_id` 合并两路召回结果；
+- 使用 `final_score = keyword_weight * keyword_score + vector_weight * vector_score` 计算融合分数；
+- 默认 `keyword_weight = 0.4`，`vector_weight = 0.6`；
+- 按 `final_score` 降序返回前 `top_k` 个 `RetrievedChunk`。
+
+SimpleReranker 行为：
+
+- 只接收 `RetrievedChunk` 列表；
+- 不访问索引，不重新召回；
+- 第一版按已有 `final_score` 稳定排序；
+- 将 `rerank_score` 设置为当前 `final_score`，为后续真实 Rerank 服务保留分数字段。
+
+CitationBuilder 行为：
+
+- 将 `RetrievedChunk` 转换为 `Citation`；
+- 从 `Chunk.metadata` 读取 `source` 和 `title`；
+- `snippet` 使用 Chunk 原文；
+- 优先使用 `rerank_score` 作为引用分数，缺失时使用 `final_score`；
+- 保留 Chunk metadata，便于后续展示 filename、page、section 等溯源字段。
+
+边界：
+
+- Retriever 只负责召回和融合；
+- Reranker 只负责重排；
+- CitationBuilder 只负责引用数据转换；
+- 三者都不调用 ToolExecutor；
+- 三者都不依赖具体文档解析器或文件格式。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -402,6 +452,15 @@ InMemoryChunkIndex
         |
         v
 keyword_search / vector_search
+        |
+        v
+HybridRetriever
+        |
+        v
+SimpleReranker
+        |
+        v
+CitationBuilder
 ```
 
 ## 4. 当前提交历史
@@ -415,12 +474,13 @@ b2a4fa0 新增工具注册表
 f6a77de 新增Agentic RAG设计文档与数据模型
 cf589cc 新增Markdown文档解析器
 7d90f10 新增文本切分器
+ffb1abc 新增Chunk向量化与内存索引
 ```
 
-当前 Chunk 向量化与内存向量索引代码已完成，建议提交信息：
+当前混合召回、简单重排与引用构造代码已完成，建议提交信息：
 
 ```text
-新增Chunk向量化与内存索引
+新增混合召回重排与引用构造
 ```
 
 ## 5. 测试与环境
@@ -448,7 +508,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 47 tests in 0.002s
+Ran 54 tests in 0.002s
 OK
 ```
 
@@ -458,7 +518,50 @@ OK
 - 用户已经在本地激活 `myagent-py311` 并确认 requirements 已安装；
 - 后续建议用户在 `myagent-py311` 环境中运行测试。
 
-## 6. 下一阶段计划
+## 6. 可维护性与后续增强建议
+
+当前 Chunker 和 Embedding 都是第一版 MVP，实现刻意保持简单，便于测试和面试演示。后续增强时应继续保持“输入输出契约稳定、实现可替换”的方向，避免把语义切分、真实模型调用、索引存储和 Agent Tool 适配混在一起。
+
+### 6.1 Chunker 增强
+
+当前 `TextChunker` 使用固定字符长度切分，优点是确定、简单、容易测试；不足是不了解标题、段落、列表和代码块等文档结构。
+
+后续增强建议：
+
+- 保持 `split(document) -> list[Chunk]` 和 `split_many(documents) -> list[Chunk]` 这两个调用契约；
+- 新增 `MarkdownStructureChunker` 或 `ParagraphChunker`，优先按标题、段落和列表边界切分；
+- 过长段落再回退到固定长度切分和 overlap；
+- Chunk metadata 中继续保留 `source`、`title`、`chunk_index`，后续可补充 `section`、`heading_path`、`start_offset`、`end_offset`；
+- 不让 Chunker 直接调用 Embedding、Index 或 ToolExecutor。
+
+### 6.2 Embedding 与 Index 增强
+
+当前 `SimpleEmbeddingModel` 使用确定性词袋，适合作为测试实现；不足是语义表达能力弱，中文按单字分词也比较粗糙。
+
+后续增强建议：
+
+- 在接入真实 embedding 前，再抽轻量 `EmbeddingModel` 协议；
+- 保留 `SimpleEmbeddingModel` 作为单元测试和离线演示实现；
+- 新增真实模型适配器时，只负责把文本转成项目内部向量表示，不把第三方 SDK 类型扩散到核心 RAG 模块；
+- 在接入外部向量库前，再抽轻量 `ChunkIndex` 协议；
+- 让 `HybridRetriever` 依赖 `keyword_search(query, top_k)` 和 `vector_search(query, top_k)` 这样的索引能力，而不是依赖某个具体数据库 SDK；
+- 避免提前创建没有调用方的复杂接口，等 RetrievalTool、Trace 或真实模型接入前再做小步抽象。
+
+### 6.3 推荐演进顺序
+
+建议先完成 `RetrievalTool`，形成端到端闭环，再回头增强 Chunker 和 Embedding。这样增强效果可以通过 Retrieval Test 和 Trace 直接观察，避免为了抽象而抽象。
+
+推荐顺序：
+
+```text
+1. RetrievalTool
+2. RAG Trace 与 Retrieval Test
+3. 结构感知 Chunker
+4. EmbeddingModel / ChunkIndex 轻量协议
+5. 真实 Embedding 适配器或外部向量库适配器
+```
+
+## 7. 下一阶段计划
 
 Agentic RAG 后续按以下粒度推进：
 
@@ -467,30 +570,28 @@ Agentic RAG 后续按以下粒度推进：
 2. 文档解析 Parser：已完成
 3. Chunk 切分：已完成
 4. Chunk 向量化与内存向量索引：已完成
-5. 混合召回、重排和引用构造：下一步
-6. RetrievalTool
+5. 混合召回、重排和引用构造：已完成
+6. RetrievalTool：下一步
 7. RAG Trace 与 Retrieval Test
 ```
 
 下一步建议实现：
 
 ```text
-my_agent/rag/retriever.py
-my_agent/rag/reranker.py
-my_agent/rag/citation.py
-tests/test_rag_retriever.py
+my_agent/rag/retrieval_tool.py
+tests/test_retrieval_tool.py
 ```
 
 下一步目标：
 
-- `HybridRetriever.retrieve(query, top_k)` 合并 keyword 与 vector 两路召回；
-- 使用 `final_score = keyword_weight * keyword_score + vector_weight * vector_score`；
-- 默认权重建议 `keyword_weight = 0.4`，`vector_weight = 0.6`；
-- `SimpleReranker` 只负责重排，不负责召回；
-- `CitationBuilder` 只负责把 `RetrievedChunk` 转成可返回的引用数据；
-- 保持 Retriever、Reranker、CitationBuilder 与 ToolExecutor 解耦。
+- `RetrievalTool` 显式继承现有 `Tool` 抽象；
+- `definition.name = "retrieval.search"`；
+- Tool schema 中 `top_k` 使用 `integer`，默认值 5，范围 1 到 20；
+- `run(arguments)` 调用 Retriever、Reranker 和 CitationBuilder；
+- 返回 `chunks` 与 `citations` 两部分结构化数据；
+- 保持 RetrievalTool 只做工具适配，不直接管理 Parser、Chunker 和 Index 写入。
 
-## 7. 开发约束
+## 8. 开发约束
 
 必须遵守项目 `AGENTS.md`：
 
@@ -512,7 +613,7 @@ RAG 阶段额外约束：
 - SimpleEmbeddingModel 不允许使用随机向量；
 - Retrieval Test 必须能解释召回失败原因。
 
-## 8. 面试主线
+## 9. 面试主线
 
 Tool 框架可这样讲：
 
@@ -529,6 +630,10 @@ Chunk 切分可这样讲：
 向量索引可这样讲：
 
 > 我先实现了一个确定性的 `SimpleEmbeddingModel`，用词袋和词频构造稀疏向量，避免随机向量导致测试不可复现。`InMemoryChunkIndex` 只保存 Chunk 和预计算 embedding，并提供关键词召回与向量召回两种基础能力；混合融合、重排和引用构造会放在后续独立模块里，避免索引层承担过多职责。
+
+混合召回可这样讲：
+
+> `HybridRetriever` 负责把关键词召回和向量召回按 `chunk_id` 合并，再用可配置权重计算统一 `final_score`。`SimpleReranker` 第一版只按已有分数做稳定重排，并写入 `rerank_score` 字段；`CitationBuilder` 单独负责把召回结果转换为带 source、title、snippet 和 score 的引用数据。这样召回、重排和引用构造可以分别替换，不会互相耦合。
 
 Agentic RAG 可这样讲：
 
