@@ -20,7 +20,8 @@
 4. Markdown 文档解析与 ParserRegistry；
 5. TextChunker 文档切分；
 6. Chunk 向量化与内存向量索引；
-7. 混合召回、简单重排与引用构造。
+7. 混合召回、简单重排与引用构造；
+8. RetrievalTool 工具适配。
 ```
 
 ## 2. 已完成内容
@@ -404,6 +405,92 @@ CitationBuilder 行为：
 - 三者都不调用 ToolExecutor；
 - 三者都不依赖具体文档解析器或文件格式。
 
+### 2.12 RetrievalTool 工具适配
+
+文件：
+
+```text
+my_agent/rag/retrieval_tool.py
+tests/test_retrieval_tool.py
+```
+
+完成：
+
+- `RetrievalTool`
+- `definition.name = "retrieval.search"`
+- `run(arguments)`
+- 通过 `ToolRegistry` 和 `ToolExecutor` 调用 `retrieval.search`
+
+Tool Schema：
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "用户检索问题"
+    },
+    "top_k": {
+      "type": "integer",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 20
+    }
+  },
+  "required": ["query"]
+}
+```
+
+行为：
+
+- `query` 必须是非空字符串；
+- `top_k` 默认值为 5；
+- `top_k` 必须是 1 到 20 之间的整数；
+- 调用 `HybridRetriever.retrieve(query, top_k)` 获取召回结果；
+- 调用 `SimpleReranker.rerank(query, retrieved_chunks)` 写入重排分数；
+- 调用 `CitationBuilder.build(reranked_chunks)` 生成引用；
+- 返回结构化 `query`、`chunks` 和 `citations`。
+
+返回结构：
+
+```text
+{
+  "query": "...",
+  "chunks": [
+    {
+      "chunk_id": "...",
+      "doc_id": "...",
+      "content": "...",
+      "keyword_score": 0.0,
+      "vector_score": 0.0,
+      "final_score": 0.0,
+      "rerank_score": 0.0,
+      "metadata": {...}
+    }
+  ],
+  "citations": [
+    {
+      "doc_id": "...",
+      "chunk_id": "...",
+      "source": "...",
+      "title": "...",
+      "snippet": "...",
+      "score": 0.0,
+      "metadata": {...}
+    }
+  ]
+}
+```
+
+边界：
+
+- RetrievalTool 只做 Tool 适配；
+- RetrievalTool 不负责文档解析；
+- RetrievalTool 不负责 Chunk 切分；
+- RetrievalTool 不负责索引写入；
+- RetrievalTool 不直接管理 ToolRegistry 或 ToolExecutor。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -461,6 +548,12 @@ SimpleReranker
         |
         v
 CitationBuilder
+        |
+        v
+RetrievalTool
+        |
+        v
+ToolRegistry / ToolExecutor
 ```
 
 ## 4. 当前提交历史
@@ -475,12 +568,13 @@ f6a77de 新增Agentic RAG设计文档与数据模型
 cf589cc 新增Markdown文档解析器
 7d90f10 新增文本切分器
 ffb1abc 新增Chunk向量化与内存索引
+3ee6074 新增混合召回重排与引用构造
 ```
 
-当前混合召回、简单重排与引用构造代码已完成，建议提交信息：
+当前 RetrievalTool 工具适配代码已完成，建议提交信息：
 
 ```text
-新增混合召回重排与引用构造
+新增RetrievalTool工具适配
 ```
 
 ## 5. 测试与环境
@@ -508,7 +602,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 54 tests in 0.002s
+Ran 59 tests in 0.003s
 OK
 ```
 
@@ -571,25 +665,25 @@ Agentic RAG 后续按以下粒度推进：
 3. Chunk 切分：已完成
 4. Chunk 向量化与内存向量索引：已完成
 5. 混合召回、重排和引用构造：已完成
-6. RetrievalTool：下一步
-7. RAG Trace 与 Retrieval Test
+6. RetrievalTool：已完成
+7. RAG Trace 与 Retrieval Test：下一步
 ```
 
 下一步建议实现：
 
 ```text
-my_agent/rag/retrieval_tool.py
-tests/test_retrieval_tool.py
+my_agent/rag/trace.py
+my_agent/rag/eval.py
+tests/test_rag_eval.py
 ```
 
 下一步目标：
 
-- `RetrievalTool` 显式继承现有 `Tool` 抽象；
-- `definition.name = "retrieval.search"`；
-- Tool schema 中 `top_k` 使用 `integer`，默认值 5，范围 1 到 20；
-- `run(arguments)` 调用 Retriever、Reranker 和 CitationBuilder；
-- 返回 `chunks` 与 `citations` 两部分结构化数据；
-- 保持 RetrievalTool 只做工具适配，不直接管理 Parser、Chunker 和 Index 写入。
+- 定义 `RagTrace` 记录 query、retrieved_chunks、citations 和 duration_ms；
+- 定义 `RetrievalTestCase` 表达 query、expected_doc_ids、expected_chunk_keywords 和 top_k；
+- 定义 `RetrievalEvalResult` 返回 hit、matched_doc_ids、missing_doc_ids、top_chunks 和 trace；
+- `RetrievalEvaluator` 通过 RetrievalTool 或 Retriever 执行测试；
+- 评估失败时能解释关键词召回、向量召回、融合分数、重排和引用构造中的问题位置。
 
 ## 8. 开发约束
 
@@ -634,6 +728,10 @@ Chunk 切分可这样讲：
 混合召回可这样讲：
 
 > `HybridRetriever` 负责把关键词召回和向量召回按 `chunk_id` 合并，再用可配置权重计算统一 `final_score`。`SimpleReranker` 第一版只按已有分数做稳定重排，并写入 `rerank_score` 字段；`CitationBuilder` 单独负责把召回结果转换为带 source、title、snippet 和 score 的引用数据。这样召回、重排和引用构造可以分别替换，不会互相耦合。
+
+RetrievalTool 可这样讲：
+
+> 最后我把检索链路封装成标准 `retrieval.search` Tool。Tool 层只负责参数 schema、默认值、边界校验和结果格式化，真正的召回、重排和引用构造仍然由 Retriever、Reranker、CitationBuilder 各自负责。这样 Agent 只需要通过 `ToolExecutor` 调用工具，不需要知道知识库内部是怎么检索和排序的。
 
 Agentic RAG 可这样讲：
 
