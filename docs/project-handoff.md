@@ -23,7 +23,8 @@
 7. 混合召回、简单重排与引用构造；
 8. RetrievalTool 工具适配；
 9. RAG Trace 与 Retrieval Test；
-10. State + Trace MVP。
+10. State + Trace MVP；
+11. ToolExecutor 可选写入全局工具调用 Trace。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -71,7 +72,7 @@ runtime/executor.py
 ```text
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
-第三阶段：State + Trace MVP 已完成，尚未接入 ToolExecutor 自动写入 Trace
+第三阶段：State + Trace MVP 已完成，ToolExecutor 已支持可选写入 Trace
 第四阶段：尚未开始
 第五阶段：尚未开始
 ```
@@ -81,7 +82,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议让 `ToolExecutor` 通过可选依赖写入全局 Trace，但仍保持工具执行与状态记录解耦。
+- 下一步如果继续按最终目标推进，建议在现有 SessionState 基础上实现 Checkpoint MVP，但仍暂缓 Memory 和 Human-in-the-loop。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -674,9 +675,12 @@ RetrievalEvaluator 行为：
 ```text
 my_agent/state/trace.py
 my_agent/state/session.py
+my_agent/state/recorder.py
 my_agent/state/__init__.py
 tests/test_state_trace.py
 tests/test_state_session.py
+tests/test_trace_recorder.py
+tests/test_tool_executor_trace.py
 ```
 
 完成：
@@ -684,6 +688,7 @@ tests/test_state_session.py
 - `ToolTraceRecord`
 - `SessionMessage`
 - `SessionState`
+- `TraceRecorder`
 
 `ToolTraceRecord` 字段：
 
@@ -741,7 +746,11 @@ list_tool_traces()
 - Session 不负责执行 Agent Loop；
 - Session 不负责持久化、Checkpoint 恢复或 Memory 检索；
 - `list_messages()` 和 `list_tool_traces()` 返回列表浅拷贝，避免调用方直接清空内部列表；
-- 当前尚未让 `ToolExecutor` 自动写入 Trace，下一步可通过可选依赖注入接入。
+- `TraceRecorder` 接收 `SessionState`，只负责把 `ToolTraceRecord` 写入会话状态；
+- `TraceRecorder` 初始化时会拒绝非 `SessionState`，`record_tool_call(trace)` 会拒绝非 `ToolTraceRecord`；
+- `ToolExecutor` 已支持可选 `trace_recorder` 参数，未传入时保持原有行为，传入后会把每次 `ToolCallResult` 转换为 `ToolTraceRecord`；
+- `ToolExecutor` 不直接 import 或依赖 `SessionState`，只在工具执行边界附近生成 Trace 数据；
+- 当前 Trace 已覆盖成功调用、工具不存在、参数缺失、工具异常和返回非 dict 等路径。
 
 ## 3. 当前调用链
 
@@ -763,7 +772,13 @@ ToolExecutor.execute(request)
 ToolCallResult(success, data, error, duration_ms)
         |
         v
-未来可转换为 ToolTraceRecord 并写入 SessionState
+ToolTraceRecord
+        |
+        v
+TraceRecorder.record_tool_call(trace)
+        |
+        v
+SessionState.tool_traces
 ```
 
 RAG 当前链路：
@@ -832,9 +847,10 @@ SessionState.tool_traces
 
 说明：
 
-- 当前 State 链路还是手动写入，尚未接入 `ToolExecutor`；
-- 下一步可让 `ToolExecutor` 在不改变工具执行职责的前提下，接收可选 Trace 写入依赖；
-- `ToolCallResult` 到 `ToolTraceRecord` 的转换应放在工具执行边界附近，不应让具体工具自己关心 Trace。
+- `ToolExecutor` 通过可选 `trace_recorder` 写入全局工具调用 Trace；
+- 未传入 `trace_recorder` 时，`ToolExecutor` 行为与原有测试保持一致；
+- `ToolCallResult` 到 `ToolTraceRecord` 的转换放在工具执行边界附近，具体工具不需要关心 Trace；
+- `token_usage` 当前保持 `None`，因为普通工具执行本身没有 LLM Token 来源。
 
 ## 4. 当前提交历史
 
@@ -857,7 +873,7 @@ cc32286 新增RAG Trace与检索评估
 当前 State + Trace MVP 代码已完成，建议提交信息：
 
 ```text
-新增State与工具调用Trace基础模型
+新增ToolExecutor工具调用Trace记录
 ```
 
 ## 5. 测试与环境
@@ -885,7 +901,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 71 tests in 0.003s
+Ran 80 tests in 0.004s
 OK
 ```
 
@@ -940,35 +956,33 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第三阶段的 State + Trace MVP 已完成，下一步建议继续第三阶段的第二个小切片：让 `ToolExecutor` 可选写入 Trace。
+当前第三阶段的 State + Trace MVP 与 ToolExecutor Trace 接入已完成。下一步建议继续第三阶段的第三个小切片：Checkpoint MVP。
 
 建议新增或修改文件：
 
 ```text
-my_agent/state/recorder.py
-my_agent/tools/executor.py
-tests/test_trace_recorder.py
-tests/test_tool_executor_trace.py
+my_agent/state/checkpoint.py
+tests/test_state_checkpoint.py
 ```
 
 目标：
 
-- 新增轻量 `TraceRecorder`，负责把 `ToolTraceRecord` 追加到 `SessionState`；
-- `TraceRecorder` 只负责记录，不执行工具；
-- `ToolExecutor` 增加可选依赖，例如 `trace_recorder=None`；
-- 未传入 `trace_recorder` 时，`ToolExecutor` 行为与当前完全一致；
-- 传入 `trace_recorder` 时，成功、工具不存在、参数缺失、工具异常、返回非 dict 等路径都能记录 Trace；
-- Trace 记录应复用 `ToolCallRequest` 的 `name`、`arguments`、`call_id` 和 `ToolCallResult` 的 `data`、`error`、`duration_ms`。
+- 新增 `Checkpoint` 数据模型，保存某一时刻的 `SessionState` 快照；
+- Checkpoint 只负责表达可恢复状态，不负责持久化到磁盘或数据库；
+- Checkpoint 应包含 `checkpoint_id`、`session_id`、`messages`、`tool_traces` 和可选 `metadata`；
+- 先提供从 `SessionState` 创建快照的最小能力，例如 `Checkpoint.from_session(...)`；
+- 读取快照时返回列表副本，避免外部直接修改 Checkpoint 内部状态；
+- 为后续恢复 Agent Loop、Human-in-the-loop 暂停点和 JSON DSL Runtime 节点状态预留数据基础。
 
 建议实现顺序：
 
 ```text
-1. 定义 TraceRecorder，接收 SessionState 并提供 record_tool_call(trace)；
-2. 测试 TraceRecorder 能把 ToolTraceRecord 写入 SessionState；
-3. 修改 ToolExecutor 构造函数，增加可选 trace_recorder；
-4. 在 ToolExecutor.execute 返回结果前，把 ToolCallResult 转为 ToolTraceRecord；
-5. 增加测试，验证成功和失败工具调用都会写入 Trace；
-6. 跑完整 unittest，确认已有 ToolExecutor 测试不回归。
+1. 定义 Checkpoint 数据模型，记录 session_id、messages、tool_traces、metadata；
+2. 测试 Checkpoint 能从 SessionState 创建快照；
+3. 测试快照创建后，后续修改 SessionState 不影响已有 Checkpoint；
+4. 测试 Checkpoint 拒绝空 checkpoint_id、空 session_id 和非 dict metadata；
+5. 暂不实现文件保存、数据库保存和自动恢复；
+6. 跑完整 unittest，确认已有 State/Trace/ToolExecutor 测试不回归。
 ```
 
 暂缓事项：
