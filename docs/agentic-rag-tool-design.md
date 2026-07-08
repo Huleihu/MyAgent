@@ -103,7 +103,7 @@ tests/
 文件：
 
 ```text
-my_agent/rag/document.py
+my_agent/rag/models.py
 tests/test_rag_document.py
 ```
 
@@ -173,9 +173,9 @@ tags
 文件：
 
 ```text
-my_agent/rag/parser.py
-my_agent/rag/markdown_parser.py
-my_agent/rag/parser_registry.py
+my_agent/rag/parsing/parser.py
+my_agent/rag/parsing/markdown_parser.py
+my_agent/rag/parsing/parser_registry.py
 tests/test_rag_parser.py
 ```
 
@@ -278,7 +278,7 @@ RawDocument
 文件：
 
 ```text
-my_agent/rag/chunker.py
+my_agent/rag/indexing/chunker.py
 tests/test_rag_chunker.py
 ```
 
@@ -311,8 +311,8 @@ TextChunker
 文件：
 
 ```text
-my_agent/rag/embedding.py
-my_agent/rag/index.py
+my_agent/rag/indexing/embedding.py
+my_agent/rag/indexing/index.py
 tests/test_rag_index.py
 ```
 
@@ -351,9 +351,9 @@ Embedding 规则：
 文件：
 
 ```text
-my_agent/rag/retriever.py
-my_agent/rag/reranker.py
-my_agent/rag/citation.py
+my_agent/rag/retrieval/retriever.py
+my_agent/rag/retrieval/reranker.py
+my_agent/rag/retrieval/citation.py
 tests/test_rag_retriever.py
 ```
 
@@ -395,7 +395,7 @@ vector_weight = 0.6
 文件：
 
 ```text
-my_agent/rag/retrieval_tool.py
+my_agent/rag/retrieval/retrieval_tool.py
 tests/test_retrieval_tool.py
 ```
 
@@ -473,8 +473,8 @@ RetrievalTool
 文件：
 
 ```text
-my_agent/rag/trace.py
-my_agent/rag/eval.py
+my_agent/rag/evaluation/trace.py
+my_agent/rag/evaluation/eval.py
 tests/test_rag_eval.py
 ```
 

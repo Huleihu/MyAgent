@@ -5,7 +5,7 @@
 
 import unittest
 
-from my_agent.rag.document import Citation, Chunk, Document, RetrievedChunk
+from my_agent.rag.models import Citation, Chunk, Document, RetrievedChunk
 
 
 class RagDocumentModelTest(unittest.TestCase):

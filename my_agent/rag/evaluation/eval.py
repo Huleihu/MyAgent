@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from my_agent.rag.retrieval_tool import RetrievalTool
-from my_agent.rag.trace import RagTrace
+from my_agent.rag.retrieval.retrieval_tool import RetrievalTool
+from my_agent.rag.evaluation.trace import RagTrace
 
 
 @dataclass(frozen=True)

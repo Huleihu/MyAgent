@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from my_agent.rag.document import Citation, RetrievedChunk
+from my_agent.rag.models import Citation, RetrievedChunk
 
 
 class CitationBuilder:

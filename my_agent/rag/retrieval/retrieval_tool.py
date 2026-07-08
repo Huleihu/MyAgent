@@ -8,10 +8,10 @@ from __future__ import annotations
 from typing import Any
 
 from my_agent.core.interfaces import Tool
-from my_agent.rag.citation import CitationBuilder
-from my_agent.rag.document import Citation, RetrievedChunk
-from my_agent.rag.reranker import SimpleReranker
-from my_agent.rag.retriever import HybridRetriever
+from my_agent.rag.retrieval.citation import CitationBuilder
+from my_agent.rag.models import Citation, RetrievedChunk
+from my_agent.rag.retrieval.reranker import SimpleReranker
+from my_agent.rag.retrieval.retriever import HybridRetriever
 from my_agent.tools.schema import ToolDefinition
 
 

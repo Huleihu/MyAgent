@@ -5,8 +5,8 @@
 
 import unittest
 
-from my_agent.rag.chunker import TextChunker
-from my_agent.rag.document import Chunk, Document
+from my_agent.rag.indexing.chunker import TextChunker
+from my_agent.rag.models import Chunk, Document
 
 
 def build_document(content):

@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from my_agent.rag.document import Document
+from my_agent.rag.models import Document
 
 
 def _validate_non_empty_text(field_name: str, field_value: str) -> None:

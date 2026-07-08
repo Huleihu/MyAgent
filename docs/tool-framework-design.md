@@ -346,7 +346,7 @@ FunctionTool         -> 本项目用于测试和演示的轻量工具包装
 新增：
 
 ```text
-my_agent/rag/retrieval_tool.py
+my_agent/rag/retrieval/retrieval_tool.py
 ```
 
 实现：

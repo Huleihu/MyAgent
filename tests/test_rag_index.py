@@ -5,9 +5,9 @@
 
 import unittest
 
-from my_agent.rag.document import Chunk, RetrievedChunk
-from my_agent.rag.embedding import SimpleEmbeddingModel
-from my_agent.rag.index import InMemoryChunkIndex
+from my_agent.rag.models import Chunk, RetrievedChunk
+from my_agent.rag.indexing.embedding import SimpleEmbeddingModel
+from my_agent.rag.indexing.index import InMemoryChunkIndex
 
 
 def build_chunk(chunk_id, content, index=0):

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from my_agent.rag.document import Chunk, RetrievedChunk
-from my_agent.rag.embedding import SimpleEmbeddingModel
+from my_agent.rag.models import Chunk, RetrievedChunk
+from my_agent.rag.indexing.embedding import SimpleEmbeddingModel
 
 
 @dataclass(frozen=True)

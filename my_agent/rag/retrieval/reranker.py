@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from my_agent.rag.document import RetrievedChunk
+from my_agent.rag.models import RetrievedChunk
 
 
 class SimpleReranker:

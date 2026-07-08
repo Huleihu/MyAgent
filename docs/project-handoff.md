@@ -25,6 +25,107 @@
 9. RAG Trace 与 Retrieval Test。
 ```
 
+### 1.1 最终五阶段路线图与当前进度
+
+用户确认的最终目标按五个阶段推进：
+
+```text
+第一阶段：核心数据模型与 Tool 框架
+core/models.py
+core/interfaces.py
+tools/schema.py
+tools/registry.py
+tools/executor.py
+目标：能注册一个工具、校验参数、执行工具、返回标准化 ToolCallResult。
+
+第二阶段：Agentic RAG Tool
+rag/models.py
+rag/indexing/chunker.py
+rag/indexing/embedding.py
+rag/indexing/index.py
+rag/retrieval/retriever.py
+rag/retrieval/retrieval_tool.py
+目标：把文档切 chunk，建内存索引，然后通过 retrieval.search 这个 Tool 被 Agent 调用，并返回答案相关片段和引用来源。
+
+第三阶段：Trace / State
+state/trace.py
+state/session.py
+目标：每次工具调用都能记录耗时、输入、输出、异常。这个对面试讲“可信执行链路”和“Agent Eval 数据基础”很加分。
+
+第四阶段：Agent Loop
+agent_loop/react.py
+agent_loop/planner.py
+目标：基于已有 Tool 框架做 ReAct 循环，不需要真实大模型，先用 Fake Planner/Fake LLM 模拟决策。
+
+第五阶段：JSON DSL Runtime
+dsl/schema.py
+dsl/loader.py
+runtime/graph.py
+runtime/executor.py
+目标：把前面的 Tool、RAG、Trace 包进节点编排里。
+```
+
+当前进度：
+
+```text
+第一阶段：基本完成
+第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
+第三阶段：尚未开始，下一步建议进入
+第四阶段：尚未开始
+第五阶段：尚未开始
+```
+
+说明：
+
+- 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
+- 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
+- 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
+- 下一步如果继续按最终目标推进，应优先实现第三阶段 Trace / State。
+
+### 1.2 当前 RAG 目录结构
+
+RAG 目录已按数据流阶段分组，便于阅读代码：
+
+```text
+my_agent/rag/
+  models.py
+    Document / Chunk / RetrievedChunk / Citation
+
+  parsing/
+    parser.py
+    markdown_parser.py
+    parser_registry.py
+    负责 RawDocument -> Document
+
+  indexing/
+    chunker.py
+    embedding.py
+    index.py
+    负责 Document -> Chunk -> embedding -> in-memory index
+
+  retrieval/
+    retriever.py
+    reranker.py
+    citation.py
+    retrieval_tool.py
+    负责召回、重排、引用构造和 retrieval.search Tool 适配
+
+  evaluation/
+    trace.py
+    eval.py
+    负责 RAG 专用 Trace 与检索评估
+```
+
+阅读顺序建议：
+
+```text
+models.py
+-> parsing/
+-> indexing/
+-> retrieval/
+-> evaluation/
+```
+
 ## 2. 已完成内容
 
 ### 2.1 Tool 数据模型与异常
@@ -164,7 +265,7 @@ docs/agentic-rag-tool-design.md
 文件：
 
 ```text
-my_agent/rag/document.py
+my_agent/rag/models.py
 tests/test_rag_document.py
 ```
 
@@ -221,9 +322,9 @@ Citation:
 文件：
 
 ```text
-my_agent/rag/parser.py
-my_agent/rag/markdown_parser.py
-my_agent/rag/parser_registry.py
+my_agent/rag/parsing/parser.py
+my_agent/rag/parsing/markdown_parser.py
+my_agent/rag/parsing/parser_registry.py
 tests/test_rag_parser.py
 ```
 
@@ -267,7 +368,7 @@ Chunker、Retriever、ToolExecutor 不需要知道原始文件格式。
 文件：
 
 ```text
-my_agent/rag/chunker.py
+my_agent/rag/indexing/chunker.py
 tests/test_rag_chunker.py
 ```
 
@@ -319,8 +420,8 @@ chunks:
 文件：
 
 ```text
-my_agent/rag/embedding.py
-my_agent/rag/index.py
+my_agent/rag/indexing/embedding.py
+my_agent/rag/indexing/index.py
 tests/test_rag_index.py
 ```
 
@@ -362,9 +463,9 @@ Index 行为：
 文件：
 
 ```text
-my_agent/rag/retriever.py
-my_agent/rag/reranker.py
-my_agent/rag/citation.py
+my_agent/rag/retrieval/retriever.py
+my_agent/rag/retrieval/reranker.py
+my_agent/rag/retrieval/citation.py
 tests/test_rag_retriever.py
 ```
 
@@ -411,7 +512,7 @@ CitationBuilder 行为：
 文件：
 
 ```text
-my_agent/rag/retrieval_tool.py
+my_agent/rag/retrieval/retrieval_tool.py
 tests/test_retrieval_tool.py
 ```
 
@@ -497,8 +598,8 @@ Tool Schema：
 文件：
 
 ```text
-my_agent/rag/trace.py
-my_agent/rag/eval.py
+my_agent/rag/evaluation/trace.py
+my_agent/rag/evaluation/eval.py
 tests/test_rag_eval.py
 ```
 
@@ -735,34 +836,39 @@ OK
 
 ## 7. 下一阶段计划
 
-Agentic RAG 后续按以下粒度推进：
+按最终五阶段目标，当前下一阶段应进入第三阶段 Trace / State：
 
 ```text
-1. RAG 数据模型：已完成
-2. 文档解析 Parser：已完成
-3. Chunk 切分：已完成
-4. Chunk 向量化与内存向量索引：已完成
-5. 混合召回、重排和引用构造：已完成
-6. RetrievalTool：已完成
-7. RAG Trace 与 Retrieval Test：已完成
+state/trace.py
+state/session.py
+tests/test_state_trace.py
+tests/test_state_session.py
 ```
 
-后续增强建议：
+第三阶段目标：
+
+- 每次工具调用都能记录输入、输出、异常、耗时和 call_id；
+- Trace 数据不依赖具体 Tool 类型，可记录普通工具、RAG Tool 和后续 Agent Loop 工具调用；
+- Session 负责保存一次 Agent 运行过程中的会话状态；
+- Trace / Session 不负责执行工具，工具执行仍由 `ToolExecutor` 负责；
+- 为后续 Agent Eval、Checkpoint 和 JSON DSL Runtime 留出稳定数据基础。
+
+建议实现顺序：
 
 ```text
-1. 结构感知 Chunker
-2. EmbeddingModel / ChunkIndex 轻量协议
-3. 真实 Embedding 适配器或外部向量库适配器
-4. 更细粒度的 RAG Trace 阶段事件
-5. 更丰富的 Retrieval Test 数据集
+1. 定义 ToolTraceRecord 数据模型，记录单次工具调用；
+2. 定义 SessionState 数据模型，保存 session_id、messages、tool_traces 等状态；
+3. 提供追加 trace、读取 trace、记录异常的最小 API；
+4. 增加单元测试，验证成功调用和失败调用都能记录；
+5. 后续再考虑是否让 ToolExecutor 自动写入 Trace。
 ```
 
-后续目标：
+RAG 后续增强建议：
 
 - Chunker 从固定字符切分升级为 Markdown 结构感知切分；
 - Embedding 从确定性词袋升级为可替换模型适配器；
 - Index 从内存实现升级为可替换向量库适配器；
-- Trace 细化为 parse、chunk、embed、retrieve、rerank、citation 多阶段记录；
+- RAG Trace 细化为 parse、chunk、embed、retrieve、rerank、citation 多阶段记录；
 - Retrieval Test 支持批量用例、指标汇总和失败原因统计。
 
 ## 8. 开发约束

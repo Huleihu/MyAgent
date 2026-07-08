@@ -5,19 +5,19 @@
 
 import unittest
 
-from my_agent.rag.citation import CitationBuilder
-from my_agent.rag.document import Chunk
-from my_agent.rag.embedding import SimpleEmbeddingModel
-from my_agent.rag.eval import (
+from my_agent.rag.retrieval.citation import CitationBuilder
+from my_agent.rag.models import Chunk
+from my_agent.rag.indexing.embedding import SimpleEmbeddingModel
+from my_agent.rag.evaluation.eval import (
     RetrievalEvaluator,
     RetrievalEvalResult,
     RetrievalTestCase,
 )
-from my_agent.rag.index import InMemoryChunkIndex
-from my_agent.rag.reranker import SimpleReranker
-from my_agent.rag.retrieval_tool import RetrievalTool
-from my_agent.rag.retriever import HybridRetriever
-from my_agent.rag.trace import RagTrace
+from my_agent.rag.indexing.index import InMemoryChunkIndex
+from my_agent.rag.retrieval.reranker import SimpleReranker
+from my_agent.rag.retrieval.retrieval_tool import RetrievalTool
+from my_agent.rag.retrieval.retriever import HybridRetriever
+from my_agent.rag.evaluation.trace import RagTrace
 
 
 def build_tool():

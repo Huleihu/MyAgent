@@ -5,10 +5,10 @@
 
 import unittest
 
-from my_agent.rag.document import Document
-from my_agent.rag.markdown_parser import MarkdownDocumentParser
-from my_agent.rag.parser import RawDocument
-from my_agent.rag.parser_registry import DocumentParserRegistry
+from my_agent.rag.models import Document
+from my_agent.rag.parsing.markdown_parser import MarkdownDocumentParser
+from my_agent.rag.parsing.parser import RawDocument
+from my_agent.rag.parsing.parser_registry import DocumentParserRegistry
 
 
 class RagParserTest(unittest.TestCase):

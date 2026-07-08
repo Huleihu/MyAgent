@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-from my_agent.rag.document import RetrievedChunk
-from my_agent.rag.index import InMemoryChunkIndex
+from my_agent.rag.models import RetrievedChunk
+from my_agent.rag.indexing.index import InMemoryChunkIndex
 
 
 class HybridRetriever:

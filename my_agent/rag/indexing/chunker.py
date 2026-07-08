@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from my_agent.rag.document import Chunk, Document
+from my_agent.rag.models import Chunk, Document
 
 
 class TextChunker:

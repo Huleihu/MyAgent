@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from my_agent.rag.document import Document
-from my_agent.rag.parser import DocumentParser, RawDocument
+from my_agent.rag.models import Document
+from my_agent.rag.parsing.parser import DocumentParser, RawDocument
 
 
 class DocumentParserRegistry:

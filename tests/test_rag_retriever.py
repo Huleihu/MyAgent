@@ -5,12 +5,12 @@
 
 import unittest
 
-from my_agent.rag.citation import CitationBuilder
-from my_agent.rag.document import Chunk, RetrievedChunk
-from my_agent.rag.embedding import SimpleEmbeddingModel
-from my_agent.rag.index import InMemoryChunkIndex
-from my_agent.rag.reranker import SimpleReranker
-from my_agent.rag.retriever import HybridRetriever
+from my_agent.rag.retrieval.citation import CitationBuilder
+from my_agent.rag.models import Chunk, RetrievedChunk
+from my_agent.rag.indexing.embedding import SimpleEmbeddingModel
+from my_agent.rag.indexing.index import InMemoryChunkIndex
+from my_agent.rag.retrieval.reranker import SimpleReranker
+from my_agent.rag.retrieval.retriever import HybridRetriever
 
 
 def build_chunk(chunk_id, content, index=0, title="测试文档"):
