@@ -22,7 +22,8 @@
 6. Chunk 向量化与内存向量索引；
 7. 混合召回、简单重排与引用构造；
 8. RetrievalTool 工具适配；
-9. RAG Trace 与 Retrieval Test。
+9. RAG Trace 与 Retrieval Test；
+10. State + Trace MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -50,7 +51,7 @@ rag/retrieval/retrieval_tool.py
 第三阶段：Trace / State
 state/trace.py
 state/session.py
-目标：每次工具调用都能记录耗时、输入、输出、异常。这个对面试讲“可信执行链路”和“Agent Eval 数据基础”很加分。
+目标：每次工具调用都能记录耗时、输入、输出、异常，并能把消息与工具调用记录保存到会话状态中。这个对面试讲“可信执行链路”和“Agent Eval 数据基础”很加分。
 
 第四阶段：Agent Loop
 agent_loop/react.py
@@ -70,7 +71,7 @@ runtime/executor.py
 ```text
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
-第三阶段：尚未开始，下一步建议进入
+第三阶段：State + Trace MVP 已完成，尚未接入 ToolExecutor 自动写入 Trace
 第四阶段：尚未开始
 第五阶段：尚未开始
 ```
@@ -80,7 +81,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，应优先实现第三阶段 Trace / State。
+- 下一步如果继续按最终目标推进，建议让 `ToolExecutor` 通过可选依赖写入全局 Trace，但仍保持工具执行与状态记录解耦。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -666,6 +667,82 @@ RetrievalEvaluator 行为：
 - Evaluator 不直接调用 Parser 或 Chunker；
 - 评估基于 RetrievalTool 的结构化返回，保证覆盖端到端工具链。
 
+### 2.14 State + Trace MVP
+
+文件：
+
+```text
+my_agent/state/trace.py
+my_agent/state/session.py
+my_agent/state/__init__.py
+tests/test_state_trace.py
+tests/test_state_session.py
+```
+
+完成：
+
+- `ToolTraceRecord`
+- `SessionMessage`
+- `SessionState`
+
+`ToolTraceRecord` 字段：
+
+```text
+trace_id
+tool_name
+call_id
+arguments
+success
+result
+error
+duration_ms
+token_usage
+```
+
+行为与约束：
+
+- `trace_id` 和 `tool_name` 必须是非空字符串；
+- `call_id` 可以为空，便于记录没有外部调用编号的工具调用；
+- `arguments` 必须是 `dict`；
+- `result`、`error`、`token_usage` 必须是 `dict` 或 `None`，便于后续 JSON 序列化；
+- `duration_ms` 必须是非负数；
+- 成功记录必须有 `result` 且不能有 `error`；
+- 失败记录必须有结构化 `error`；
+- Trace 只记录工具调用，不执行工具，也不依赖具体 Tool 或 RAG 类型。
+
+`SessionMessage` 字段：
+
+```text
+role
+content
+metadata
+```
+
+`SessionState` 字段：
+
+```text
+session_id
+messages
+tool_traces
+```
+
+`SessionState` 最小 API：
+
+```text
+add_message(role, content, metadata=None)
+add_tool_trace(trace)
+list_messages()
+list_tool_traces()
+```
+
+边界：
+
+- Session 只保存一次 Agent 会话中的消息和工具调用记录；
+- Session 不负责执行 Agent Loop；
+- Session 不负责持久化、Checkpoint 恢复或 Memory 检索；
+- `list_messages()` 和 `list_tool_traces()` 返回列表浅拷贝，避免调用方直接清空内部列表；
+- 当前尚未让 `ToolExecutor` 自动写入 Trace，下一步可通过可选依赖注入接入。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -684,6 +761,9 @@ ToolExecutor.execute(request)
         |
         v
 ToolCallResult(success, data, error, duration_ms)
+        |
+        v
+未来可转换为 ToolTraceRecord 并写入 SessionState
 ```
 
 RAG 当前链路：
@@ -734,6 +814,28 @@ ToolRegistry / ToolExecutor
 RagTrace / RetrievalEvaluator
 ```
 
+State 当前链路：
+
+```text
+SessionState
+        |
+        | add_message(role, content, metadata)
+        v
+list[SessionMessage]
+
+ToolTraceRecord
+        |
+        | add_tool_trace(trace)
+        v
+SessionState.tool_traces
+```
+
+说明：
+
+- 当前 State 链路还是手动写入，尚未接入 `ToolExecutor`；
+- 下一步可让 `ToolExecutor` 在不改变工具执行职责的前提下，接收可选 Trace 写入依赖；
+- `ToolCallResult` 到 `ToolTraceRecord` 的转换应放在工具执行边界附近，不应让具体工具自己关心 Trace。
+
 ## 4. 当前提交历史
 
 ```text
@@ -748,12 +850,14 @@ cf589cc 新增Markdown文档解析器
 ffb1abc 新增Chunk向量化与内存索引
 3ee6074 新增混合召回重排与引用构造
 ad5b934 新增RetrievalTool工具适配
+cc32286 新增RAG Trace与检索评估
+71761fc 重组RAG目录结构
 ```
 
-当前 RAG Trace 与 Retrieval Test 代码已完成，建议提交信息：
+当前 State + Trace MVP 代码已完成，建议提交信息：
 
 ```text
-新增RAG Trace与检索评估
+新增State与工具调用Trace基础模型
 ```
 
 ## 5. 测试与环境
@@ -781,7 +885,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 63 tests in 0.003s
+Ran 71 tests in 0.003s
 OK
 ```
 
@@ -836,32 +940,44 @@ OK
 
 ## 7. 下一阶段计划
 
-按最终五阶段目标，当前下一阶段应进入第三阶段 Trace / State：
+当前第三阶段的 State + Trace MVP 已完成，下一步建议继续第三阶段的第二个小切片：让 `ToolExecutor` 可选写入 Trace。
+
+建议新增或修改文件：
 
 ```text
-state/trace.py
-state/session.py
-tests/test_state_trace.py
-tests/test_state_session.py
+my_agent/state/recorder.py
+my_agent/tools/executor.py
+tests/test_trace_recorder.py
+tests/test_tool_executor_trace.py
 ```
 
-第三阶段目标：
+目标：
 
-- 每次工具调用都能记录输入、输出、异常、耗时和 call_id；
-- Trace 数据不依赖具体 Tool 类型，可记录普通工具、RAG Tool 和后续 Agent Loop 工具调用；
-- Session 负责保存一次 Agent 运行过程中的会话状态；
-- Trace / Session 不负责执行工具，工具执行仍由 `ToolExecutor` 负责；
-- 为后续 Agent Eval、Checkpoint 和 JSON DSL Runtime 留出稳定数据基础。
+- 新增轻量 `TraceRecorder`，负责把 `ToolTraceRecord` 追加到 `SessionState`；
+- `TraceRecorder` 只负责记录，不执行工具；
+- `ToolExecutor` 增加可选依赖，例如 `trace_recorder=None`；
+- 未传入 `trace_recorder` 时，`ToolExecutor` 行为与当前完全一致；
+- 传入 `trace_recorder` 时，成功、工具不存在、参数缺失、工具异常、返回非 dict 等路径都能记录 Trace；
+- Trace 记录应复用 `ToolCallRequest` 的 `name`、`arguments`、`call_id` 和 `ToolCallResult` 的 `data`、`error`、`duration_ms`。
 
 建议实现顺序：
 
 ```text
-1. 定义 ToolTraceRecord 数据模型，记录单次工具调用；
-2. 定义 SessionState 数据模型，保存 session_id、messages、tool_traces 等状态；
-3. 提供追加 trace、读取 trace、记录异常的最小 API；
-4. 增加单元测试，验证成功调用和失败调用都能记录；
-5. 后续再考虑是否让 ToolExecutor 自动写入 Trace。
+1. 定义 TraceRecorder，接收 SessionState 并提供 record_tool_call(trace)；
+2. 测试 TraceRecorder 能把 ToolTraceRecord 写入 SessionState；
+3. 修改 ToolExecutor 构造函数，增加可选 trace_recorder；
+4. 在 ToolExecutor.execute 返回结果前，把 ToolCallResult 转为 ToolTraceRecord；
+5. 增加测试，验证成功和失败工具调用都会写入 Trace；
+6. 跑完整 unittest，确认已有 ToolExecutor 测试不回归。
 ```
+
+暂缓事项：
+
+- 暂不做 Memory；
+- 暂不做 Checkpoint 持久化；
+- 暂不做 Human-in-the-loop 暂停恢复；
+- 暂不做节点执行路径 Trace，因为当前还没有 Agent Loop 或 JSON DSL Runtime 节点图；
+- 暂不把 RAG 专用 `RagTrace` 合并进全局 Trace，避免混淆评估 Trace 与 Runtime Trace。
 
 RAG 后续增强建议：
 
