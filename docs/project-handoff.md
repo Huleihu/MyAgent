@@ -24,7 +24,8 @@
 8. RetrievalTool 工具适配；
 9. RAG Trace 与 Retrieval Test；
 10. State + Trace MVP；
-11. ToolExecutor 可选写入全局工具调用 Trace。
+11. ToolExecutor 可选写入全局工具调用 Trace；
+12. Checkpoint MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -72,8 +73,8 @@ runtime/executor.py
 ```text
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
-第三阶段：State + Trace MVP 已完成，ToolExecutor 已支持可选写入 Trace
-第四阶段：尚未开始
+第三阶段：State / Trace / Checkpoint MVP 已完成
+第四阶段：尚未开始，下一步建议进入 Agent Loop MVP
 第五阶段：尚未开始
 ```
 
@@ -82,7 +83,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议在现有 SessionState 基础上实现 Checkpoint MVP，但仍暂缓 Memory 和 Human-in-the-loop。
+- 下一步如果继续按最终目标推进，建议进入 Agent Loop MVP，把 Tool、RAG、State、Trace 和 Checkpoint 串成可演示闭环。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -676,11 +677,13 @@ RetrievalEvaluator 行为：
 my_agent/state/trace.py
 my_agent/state/session.py
 my_agent/state/recorder.py
+my_agent/state/checkpoint.py
 my_agent/state/__init__.py
 tests/test_state_trace.py
 tests/test_state_session.py
 tests/test_trace_recorder.py
 tests/test_tool_executor_trace.py
+tests/test_state_checkpoint.py
 ```
 
 完成：
@@ -689,6 +692,7 @@ tests/test_tool_executor_trace.py
 - `SessionMessage`
 - `SessionState`
 - `TraceRecorder`
+- `Checkpoint`
 
 `ToolTraceRecord` 字段：
 
@@ -751,6 +755,32 @@ list_tool_traces()
 - `ToolExecutor` 已支持可选 `trace_recorder` 参数，未传入时保持原有行为，传入后会把每次 `ToolCallResult` 转换为 `ToolTraceRecord`；
 - `ToolExecutor` 不直接 import 或依赖 `SessionState`，只在工具执行边界附近生成 Trace 数据；
 - 当前 Trace 已覆盖成功调用、工具不存在、参数缺失、工具异常和返回非 dict 等路径。
+
+`Checkpoint` 字段：
+
+```text
+checkpoint_id
+session_id
+messages
+tool_traces
+metadata
+```
+
+`Checkpoint` 最小 API：
+
+```text
+Checkpoint.from_session(checkpoint_id, session_state, metadata=None)
+list_messages()
+list_tool_traces()
+```
+
+边界：
+
+- Checkpoint 只负责保存某一时刻的 `SessionState` 内存快照；
+- Checkpoint 不负责文件持久化、数据库存储或 Agent Loop 恢复；
+- 从 `SessionState` 创建快照后，后续继续修改 Session 不会改变已有 Checkpoint 的列表内容；
+- `list_messages()` 和 `list_tool_traces()` 返回列表浅拷贝，避免调用方直接清空内部列表；
+- 当前未做 `metadata` 深拷贝，后续如果需要严格不可变快照，可再升级为深拷贝或序列化快照。
 
 ## 3. 当前调用链
 
@@ -873,7 +903,7 @@ cc32286 新增RAG Trace与检索评估
 当前 State + Trace MVP 代码已完成，建议提交信息：
 
 ```text
-新增ToolExecutor工具调用Trace记录
+新增Checkpoint会话状态快照模型
 ```
 
 ## 5. 测试与环境
@@ -901,7 +931,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 80 tests in 0.004s
+Ran 85 tests in 0.004s
 OK
 ```
 
@@ -956,41 +986,43 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第三阶段的 State + Trace MVP 与 ToolExecutor Trace 接入已完成。下一步建议继续第三阶段的第三个小切片：Checkpoint MVP。
+当前第三阶段的 State / Trace / Checkpoint MVP 已完成。下一步建议进入第四阶段的 Agent Loop MVP。
 
 建议新增或修改文件：
 
 ```text
-my_agent/state/checkpoint.py
-tests/test_state_checkpoint.py
+my_agent/agent_loop/planner.py
+my_agent/agent_loop/react.py
+my_agent/agent_loop/__init__.py
+tests/test_agent_loop.py
 ```
 
 目标：
 
-- 新增 `Checkpoint` 数据模型，保存某一时刻的 `SessionState` 快照；
-- Checkpoint 只负责表达可恢复状态，不负责持久化到磁盘或数据库；
-- Checkpoint 应包含 `checkpoint_id`、`session_id`、`messages`、`tool_traces` 和可选 `metadata`；
-- 先提供从 `SessionState` 创建快照的最小能力，例如 `Checkpoint.from_session(...)`；
-- 读取快照时返回列表副本，避免外部直接修改 Checkpoint 内部状态；
-- 为后续恢复 Agent Loop、Human-in-the-loop 暂停点和 JSON DSL Runtime 节点状态预留数据基础。
+- 新增轻量 Planner 抽象或数据模型，先用 Fake Planner 表达下一步动作；
+- 新增 ReActAgentLoop，把用户输入、工具调用、工具结果和最终回答串起来；
+- 第一版不接真实 LLM，只用 Fake Planner / Fake LLM 保证链路可测；
+- Agent Loop 通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
+- Agent Loop 写入 `SessionState` 消息，并通过现有 `ToolExecutor + TraceRecorder` 自动留下工具调用 Trace；
+- 在关键步骤可以创建 `Checkpoint`，例如用户输入后、工具调用后或最终回答前。
 
 建议实现顺序：
 
 ```text
-1. 定义 Checkpoint 数据模型，记录 session_id、messages、tool_traces、metadata；
-2. 测试 Checkpoint 能从 SessionState 创建快照；
-3. 测试快照创建后，后续修改 SessionState 不影响已有 Checkpoint；
-4. 测试 Checkpoint 拒绝空 checkpoint_id、空 session_id 和非 dict metadata；
-5. 暂不实现文件保存、数据库保存和自动恢复；
-6. 跑完整 unittest，确认已有 State/Trace/ToolExecutor 测试不回归。
+1. 定义 Agent 动作数据模型，例如最终回答动作和工具调用动作；
+2. 定义 FakePlanner，用固定策略根据用户输入产生工具调用或最终回答；
+3. 定义 ReActAgentLoop，负责追加用户消息、执行动作、追加助手消息；
+4. 测试 Agent Loop 能调用已注册工具并写入 Trace；
+5. 测试 Agent Loop 能在不需要工具时直接返回最终回答；
+6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint 测试不回归。
 ```
 
 暂缓事项：
 
 - 暂不做 Memory；
-- 暂不做 Checkpoint 持久化；
+- 暂不做 Checkpoint 持久化和自动恢复；
 - 暂不做 Human-in-the-loop 暂停恢复；
-- 暂不做节点执行路径 Trace，因为当前还没有 Agent Loop 或 JSON DSL Runtime 节点图；
+- 暂不做复杂节点执行路径 Trace，等 Agent Loop MVP 跑通后再细化；
 - 暂不把 RAG 专用 `RagTrace` 合并进全局 Trace，避免混淆评估 Trace 与 Runtime Trace。
 
 RAG 后续增强建议：
