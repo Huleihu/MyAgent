@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from uuid import uuid4
 
 from my_agent.agent_loop.planner import FinalAnswerAction, Planner, ToolAction
+from my_agent.state.checkpoint_recorder import CheckpointRecorder
 from my_agent.state.session import SessionState
 from my_agent.tools.executor import ToolExecutor
 from my_agent.tools.schema import ToolCallRequest, ToolCallResult
@@ -30,6 +32,7 @@ class ReActAgentLoop:
         tool_executor: ToolExecutor,
         session_state: SessionState,
         max_rounds: int = 5,
+        checkpoint_recorder: CheckpointRecorder | None = None,
     ) -> None:
         if not isinstance(planner, Planner):
             raise TypeError("planner must be a Planner")
@@ -39,11 +42,16 @@ class ReActAgentLoop:
             raise TypeError("session_state must be a SessionState")
         if not isinstance(max_rounds, int) or max_rounds <= 0:
             raise ValueError("max_rounds must be a positive integer")
+        if checkpoint_recorder is not None and not isinstance(
+            checkpoint_recorder, CheckpointRecorder
+        ):
+            raise TypeError("checkpoint_recorder must be a CheckpointRecorder or None")
 
         self._planner = planner
         self._tool_executor = tool_executor
         self._session_state = session_state
         self._max_rounds = max_rounds
+        self._checkpoint_recorder = checkpoint_recorder
 
     def run(self, user_input: str) -> str:
         """执行多轮 Agent Loop，并返回最终助手输出文本。"""
@@ -51,17 +59,30 @@ class ReActAgentLoop:
             raise ValueError("user_input must be a non-empty string")
 
         self._session_state.add_message("user", user_input)
+        self._record_checkpoint({"reason": "after_user_input", "round_index": 0})
 
-        for _round_index in range(self._max_rounds):
+        for round_index in range(1, self._max_rounds + 1):
             action = self._planner.plan(user_input, self._session_state)
 
             if isinstance(action, FinalAnswerAction):
                 self._session_state.add_message("assistant", action.answer)
+                self._record_checkpoint(
+                    {"reason": "after_final_answer", "round_index": round_index}
+                )
                 return action.answer
 
             if isinstance(action, ToolAction):
                 result = self._execute_tool_action(action)
                 self._add_tool_observation(result)
+                self._record_checkpoint(
+                    {
+                        "reason": "after_tool_observation",
+                        "round_index": round_index,
+                        "tool_name": result.name,
+                        "call_id": result.call_id,
+                        "success": result.success,
+                    }
+                )
                 continue
 
             raise ValueError("unsupported agent action")
@@ -99,3 +120,9 @@ class ReActAgentLoop:
                 "success": result.success,
             },
         )
+
+    def _record_checkpoint(self, metadata: dict[str, Any]) -> None:
+        """在配置 Recorder 时记录会话快照。"""
+        if self._checkpoint_recorder is None:
+            return
+        self._checkpoint_recorder.record(metadata)

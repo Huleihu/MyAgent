@@ -27,6 +27,7 @@
 11. ToolExecutor 可选写入全局工具调用 Trace；
 12. Checkpoint MVP；
 13. 多轮 ReAct Agent Loop MVP。
+14. CheckpointRecorder 与 Agent Loop Checkpoint 接入 MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -75,7 +76,7 @@ runtime/executor.py
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
-第四阶段：多轮 ReAct Agent Loop MVP 已完成，尚未接真实 LLM 与 Checkpoint
+第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint，尚未接真实 LLM
 第五阶段：尚未开始
 ```
 
@@ -84,7 +85,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议为 Agent Loop 接入 Checkpoint，增强可恢复性和状态快照能力。
+- 下一步如果继续按最终目标推进，建议继续增强 Agent Loop，可优先接入真实 LLM Planner 或补充 Checkpoint 持久化与恢复。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -839,9 +840,51 @@ Planner 边界：
 - 当前每轮只支持一个 `ToolAction`，后续并发 tool-calling 可扩展为一轮返回多个工具动作；
 - 当前只限制 `max_rounds`，暂不引入 `max_tool_calls`，等并发 tool-calling 实现时再补充工具总调用数限制；
 - 当前不接真实 LLM；
-- 当前不自动创建 Checkpoint；
+- 当前仅在配置 `CheckpointRecorder` 时创建 Checkpoint；
 - 当前不做 Memory、Human-in-the-loop 或 JSON DSL Runtime；
 - Agent Loop 只依赖 `Planner`、`ToolExecutor` 和 `SessionState`，不直接依赖具体工具或 RAG 内部模块。
+
+### 2.16 CheckpointRecorder 与 Agent Loop Checkpoint 接入
+
+文件：
+
+```text
+my_agent/state/checkpoint_recorder.py
+my_agent/state/__init__.py
+my_agent/agent_loop/react.py
+tests/test_checkpoint_recorder.py
+tests/test_agent_loop.py
+```
+
+完成：
+
+- `CheckpointRecorder`
+- `record(metadata=None)`
+- `list_checkpoints()`
+- `ReActAgentLoop` 可选接收 `checkpoint_recorder`
+
+`CheckpointRecorder` 行为：
+
+- 初始化时接收 `SessionState`；
+- `record(metadata=None)` 内部生成 `checkpoint_id`，并通过 `Checkpoint.from_session(...)` 创建内存快照；
+- `list_checkpoints()` 返回列表副本，避免调用方清空内部 checkpoint 记录；
+- 不负责文件持久化、数据库存储或从 checkpoint 恢复。
+
+Agent Loop Checkpoint 行为：
+
+- 未传入 `checkpoint_recorder` 时，Agent Loop 行为保持不变；
+- 用户输入写入 session 后记录 checkpoint，metadata 使用 `reason="after_user_input"` 和 `round_index=0`；
+- 工具调用完成后，先由 `ToolExecutor` 写入 trace，再由 Agent Loop 写入 observation message，最后记录 checkpoint；
+- 工具 observation checkpoint 使用 `reason="after_tool_observation"`，并记录 `round_index`、`tool_name`、`call_id`、`success`；
+- 最终回答写入 session 后记录 checkpoint，metadata 使用 `reason="after_final_answer"`；
+- `round_index` 表示第几轮 Planner 决策完成后：直接最终回答为 1，第一轮工具后为 1，第二轮工具后为 2。
+
+边界：
+
+- Checkpoint 仍然是内存快照；
+- 暂不做 Checkpoint 持久化；
+- 暂不做从 Checkpoint 恢复 Agent Loop；
+- 暂不做 checkpoint graph/tree。
 
 ## 3. 当前调用链
 
@@ -969,6 +1012,7 @@ d047bf3 新增单步ReAct Agent Loop
 
 ```text
 新增多轮ReAct Agent Loop
+新增Agent Loop Checkpoint记录器
 ```
 
 ## 5. 测试与环境
@@ -996,7 +1040,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 93 tests in 0.006s
+Ran 101 tests in 0.005s
 OK
 ```
 
@@ -1051,34 +1095,31 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第四阶段的多轮 ReAct Agent Loop MVP 已完成。下一步建议继续增强 Agent Loop 的 Checkpoint 能力。
+当前第四阶段的多轮 ReAct Agent Loop MVP 与 Checkpoint 接入 MVP 已完成。下一步建议继续增强 Agent Loop 的模型决策或恢复能力。
 
 建议新增或修改文件：
 
 ```text
-my_agent/state/checkpoint_recorder.py
-my_agent/state/__init__.py
+my_agent/agent_loop/planner.py
 my_agent/agent_loop/react.py
 tests/test_agent_loop.py
-tests/test_checkpoint_recorder.py
 ```
 
 目标：
 
-- Agent Loop 可选接入 Checkpoint，在用户输入后、工具 observation 后和最终回答后创建快照；
-- Checkpoint 接入应通过轻量记录器或注入式依赖完成，避免让 Agent Loop 直接承担快照存储职责；
-- 继续保持 Planner 与具体 LLM 解耦；
+- 新增真实或半真实 `LLMPlanner(Planner)`，替换当前测试用 `FakePlanner` 的决策来源；
+- 继续保持 Planner 与具体 LLM 供应商解耦，第三方 SDK 类型不得扩散到 Agent Loop；
 - Agent Loop 仍应通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
-- 工具调用 Trace 仍由现有 `ToolExecutor + TraceRecorder` 自动写入。
+- 工具调用 Trace 和 Checkpoint 继续由现有 Recorder 边界写入。
 
 建议实现顺序：
 
 ```text
-1. 先新增轻量 CheckpointRecorder，只负责从 SessionState 创建并保存内存快照；
-2. ReActAgentLoop 可选接收 checkpoint_recorder，未传入时保持现有行为；
-3. 在 after_user_input、after_tool_observation、after_final_answer 三个阶段记录 checkpoint；
-4. 每个 checkpoint metadata 写入 reason、round_index 等最小必要信息；
-5. 后续再考虑文件持久化、数据库存储或从 checkpoint 恢复；
+1. 先定义 `LLMPlanner` 所需的最小模型调用接口或测试 Fake，避免 Agent Loop 直接依赖具体模型 SDK；
+2. 让 `LLMPlanner` 根据 `SessionState` 中的消息、tool observation 和可用工具定义生成 `AgentAction`；
+3. 保持 `Planner.plan(user_input, session)` 接口稳定；
+4. 为工具选择、最终回答和异常输出先写单元测试；
+5. 后续再考虑 Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
 6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop 测试不回归。
 ```
 

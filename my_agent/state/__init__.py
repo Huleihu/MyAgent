@@ -4,12 +4,14 @@
 """
 
 from my_agent.state.checkpoint import Checkpoint
+from my_agent.state.checkpoint_recorder import CheckpointRecorder
 from my_agent.state.recorder import TraceRecorder
 from my_agent.state.session import SessionMessage, SessionState
 from my_agent.state.trace import ToolTraceRecord
 
 __all__ = [
     "Checkpoint",
+    "CheckpointRecorder",
     "SessionMessage",
     "SessionState",
     "TraceRecorder",

@@ -1,5 +1,5 @@
 """
-本文件负责验证单步 ReAct Agent Loop 的编排行为。
+本文件负责验证多轮 ReAct Agent Loop 的编排行为。
 本文件不测试真实 LLM，也不测试具体业务工具的内部逻辑。
 """
 
@@ -7,6 +7,7 @@ import unittest
 
 from my_agent.agent_loop.planner import FakePlanner, FinalAnswerAction, Planner, ToolAction
 from my_agent.agent_loop.react import ReActAgentLoop
+from my_agent.state.checkpoint_recorder import CheckpointRecorder
 from my_agent.state.recorder import TraceRecorder
 from my_agent.state.session import SessionState
 from my_agent.tools.executor import ToolExecutor
@@ -216,6 +217,98 @@ class AgentLoopTest(unittest.TestCase):
                 session_state=session,
                 max_rounds=0,
             )
+
+    def test_checkpoint_recorder_records_user_and_direct_final_answer(self):
+        session = SessionState(session_id="session-1")
+        recorder = CheckpointRecorder(session)
+        planner = FakePlanner([FinalAnswerAction(answer="直接回答")])
+        agent_loop = ReActAgentLoop(
+            planner=planner,
+            tool_executor=build_executor(session),
+            session_state=session,
+            checkpoint_recorder=recorder,
+        )
+
+        agent_loop.run("你好")
+
+        checkpoints = recorder.list_checkpoints()
+        self.assertEqual(len(checkpoints), 2)
+        self.assertEqual(checkpoints[0].metadata["reason"], "after_user_input")
+        self.assertEqual(checkpoints[0].metadata["round_index"], 0)
+        self.assertEqual(len(checkpoints[0].list_messages()), 1)
+        self.assertEqual(checkpoints[1].metadata["reason"], "after_final_answer")
+        self.assertEqual(checkpoints[1].metadata["round_index"], 1)
+        self.assertEqual(checkpoints[1].list_messages()[-1].content, "直接回答")
+
+    def test_checkpoint_recorder_records_tool_observation_after_message_written(self):
+        session = SessionState(session_id="session-1")
+        recorder = CheckpointRecorder(session)
+        planner = FakePlanner(
+            [
+                ToolAction(
+                    tool_name="calculator.add",
+                    arguments={"a": 2, "b": 3},
+                    call_id="tool-call-1",
+                ),
+                FinalAnswerAction(answer="最终答案是 5"),
+            ]
+        )
+        agent_loop = ReActAgentLoop(
+            planner=planner,
+            tool_executor=build_executor(session),
+            session_state=session,
+            checkpoint_recorder=recorder,
+        )
+
+        agent_loop.run("计算 2 + 3")
+
+        checkpoints = recorder.list_checkpoints()
+        tool_checkpoint = checkpoints[1]
+        tool_messages = tool_checkpoint.list_messages()
+        self.assertEqual(tool_checkpoint.metadata["reason"], "after_tool_observation")
+        self.assertEqual(tool_checkpoint.metadata["round_index"], 1)
+        self.assertEqual(tool_checkpoint.metadata["tool_name"], "calculator.add")
+        self.assertEqual(tool_checkpoint.metadata["call_id"], "tool-call-1")
+        self.assertTrue(tool_checkpoint.metadata["success"])
+        self.assertEqual(tool_messages[-1].metadata["message_type"], "tool_observation")
+        self.assertEqual(len(tool_checkpoint.list_tool_traces()), 1)
+        self.assertEqual(checkpoints[2].metadata["reason"], "after_final_answer")
+        self.assertEqual(checkpoints[2].metadata["round_index"], 2)
+
+    def test_checkpoint_recorder_uses_planner_round_index_for_multiple_tools(self):
+        session = SessionState(session_id="session-1")
+        recorder = CheckpointRecorder(session)
+        planner = FakePlanner(
+            [
+                ToolAction(tool_name="calculator.add", arguments={"a": 1, "b": 2}),
+                ToolAction(tool_name="calculator.add", arguments={"a": 3, "b": 4}),
+                FinalAnswerAction(answer="两次计算已完成"),
+            ]
+        )
+        agent_loop = ReActAgentLoop(
+            planner=planner,
+            tool_executor=build_executor(session),
+            session_state=session,
+            checkpoint_recorder=recorder,
+            max_rounds=3,
+        )
+
+        agent_loop.run("分别计算两组数字")
+
+        checkpoints = recorder.list_checkpoints()
+        self.assertEqual(
+            [checkpoint.metadata["reason"] for checkpoint in checkpoints],
+            [
+                "after_user_input",
+                "after_tool_observation",
+                "after_tool_observation",
+                "after_final_answer",
+            ],
+        )
+        self.assertEqual(
+            [checkpoint.metadata["round_index"] for checkpoint in checkpoints],
+            [0, 1, 2, 3],
+        )
 
 
 if __name__ == "__main__":
