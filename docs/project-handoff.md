@@ -25,7 +25,8 @@
 9. RAG Trace 与 Retrieval Test；
 10. State + Trace MVP；
 11. ToolExecutor 可选写入全局工具调用 Trace；
-12. Checkpoint MVP。
+12. Checkpoint MVP；
+13. 单步 Agent Loop MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -74,7 +75,7 @@ runtime/executor.py
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
-第四阶段：尚未开始，下一步建议进入 Agent Loop MVP
+第四阶段：单步 Agent Loop MVP 已完成，尚未接真实 LLM 与多步 ReAct
 第五阶段：尚未开始
 ```
 
@@ -83,7 +84,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议进入 Agent Loop MVP，把 Tool、RAG、State、Trace 和 Checkpoint 串成可演示闭环。
+- 下一步如果继续按最终目标推进，建议增强 Agent Loop，优先接入 Checkpoint 或升级为多步 ReAct 循环。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -782,6 +783,63 @@ list_tool_traces()
 - `list_messages()` 和 `list_tool_traces()` 返回列表浅拷贝，避免调用方直接清空内部列表；
 - 当前未做 `metadata` 深拷贝，后续如果需要严格不可变快照，可再升级为深拷贝或序列化快照。
 
+### 2.15 单步 Agent Loop MVP
+
+文件：
+
+```text
+my_agent/agent_loop/planner.py
+my_agent/agent_loop/react.py
+my_agent/agent_loop/__init__.py
+tests/test_agent_loop.py
+```
+
+完成：
+
+- `AgentAction`
+- `ToolAction`
+- `FinalAnswerAction`
+- `Planner`
+- `FakePlanner`
+- `ReActAgentLoop`
+
+`ToolAction` 字段：
+
+```text
+tool_name
+arguments
+call_id
+```
+
+`FinalAnswerAction` 字段：
+
+```text
+answer
+```
+
+Planner 边界：
+
+- `Planner.plan(user_input, session)` 只负责返回下一步动作；
+- `FakePlanner` 只用于测试和离线演示，按预设动作顺序返回；
+- 后续接真实模型时，应新增 `LLMPlanner(Planner)`，避免修改 `ReActAgentLoop`。
+
+`ReActAgentLoop` 行为：
+
+- `run(user_input)` 会先写入 user message；
+- 如果 Planner 返回 `FinalAnswerAction`，则写入 assistant message 并直接返回答案；
+- 如果 Planner 返回 `ToolAction`，则通过 `ToolExecutor` 执行工具；
+- `ToolAction.call_id` 为空时，Agent Loop 会生成新的调用编号；
+- 工具调用结果会被压缩为 assistant message 摘要，避免把完整 RAG chunks/citations 直接塞进对话；
+- 工具调用 Trace 仍由 `ToolExecutor + TraceRecorder` 自动写入 `SessionState`。
+
+边界：
+
+- 当前是单步 ReAct MVP，不做多步 while 循环；
+- 当前不接真实 LLM；
+- 当前不自动创建 Checkpoint；
+- 当前不做 Memory、Human-in-the-loop 或 JSON DSL Runtime；
+- Agent Loop 只依赖 `Planner`、`ToolExecutor` 和 `SessionState`，不直接依赖具体工具或 RAG 内部模块。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -903,7 +961,7 @@ cc32286 新增RAG Trace与检索评估
 当前 State + Trace MVP 代码已完成，建议提交信息：
 
 ```text
-新增Checkpoint会话状态快照模型
+新增单步ReAct Agent Loop
 ```
 
 ## 5. 测试与环境
@@ -931,7 +989,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 85 tests in 0.004s
+Ran 90 tests in 0.004s
 OK
 ```
 
@@ -986,35 +1044,33 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第三阶段的 State / Trace / Checkpoint MVP 已完成。下一步建议进入第四阶段的 Agent Loop MVP。
+当前第四阶段的单步 Agent Loop MVP 已完成。下一步建议继续增强 Agent Loop。
 
 建议新增或修改文件：
 
 ```text
 my_agent/agent_loop/planner.py
 my_agent/agent_loop/react.py
-my_agent/agent_loop/__init__.py
 tests/test_agent_loop.py
 ```
 
 目标：
 
-- 新增轻量 Planner 抽象或数据模型，先用 Fake Planner 表达下一步动作；
-- 新增 ReActAgentLoop，把用户输入、工具调用、工具结果和最终回答串起来；
-- 第一版不接真实 LLM，只用 Fake Planner / Fake LLM 保证链路可测；
-- Agent Loop 通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
-- Agent Loop 写入 `SessionState` 消息，并通过现有 `ToolExecutor + TraceRecorder` 自动留下工具调用 Trace；
-- 在关键步骤可以创建 `Checkpoint`，例如用户输入后、工具调用后或最终回答前。
+- Agent Loop v2 可选择接入 Checkpoint，在用户输入后、工具调用后或最终回答前创建快照；
+- 或者升级为多步 ReAct 循环，让 Planner 可以连续返回多个 `ToolAction`，直到 `FinalAnswerAction`；
+- 两条路线都应继续保持 Planner 与具体 LLM 解耦；
+- Agent Loop 仍应通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
+- 工具调用 Trace 仍由现有 `ToolExecutor + TraceRecorder` 自动写入。
 
 建议实现顺序：
 
 ```text
-1. 定义 Agent 动作数据模型，例如最终回答动作和工具调用动作；
-2. 定义 FakePlanner，用固定策略根据用户输入产生工具调用或最终回答；
-3. 定义 ReActAgentLoop，负责追加用户消息、执行动作、追加助手消息；
-4. 测试 Agent Loop 能调用已注册工具并写入 Trace；
-5. 测试 Agent Loop 能在不需要工具时直接返回最终回答；
-6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint 测试不回归。
+1. 如果优先增强可恢复性，先为 Agent Loop v2 接入 Checkpoint 列表；
+2. 如果优先增强 Agent 能力，先升级为多步 ReAct 循环；
+3. 多步循环应设置 max_steps，避免 Planner 一直返回 ToolAction 导致无限循环；
+4. 多步循环应把每次工具结果作为 observation 传回 Planner；
+5. 后续再新增 LLMPlanner，替换 FakePlanner 的决策来源；
+6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop 测试不回归。
 ```
 
 暂缓事项：
