@@ -10,12 +10,14 @@ from my_agent.agent_loop.planner import (
     Planner,
     ToolAction,
 )
+from my_agent.agent_loop.llm_planner import LLMPlanner
 from my_agent.agent_loop.react import ReActAgentLoop
 
 __all__ = [
     "AgentAction",
     "FakePlanner",
     "FinalAnswerAction",
+    "LLMPlanner",
     "Planner",
     "ReActAgentLoop",
     "ToolAction",

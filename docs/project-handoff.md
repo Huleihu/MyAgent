@@ -28,6 +28,7 @@
 12. Checkpoint MVP；
 13. 多轮 ReAct Agent Loop MVP。
 14. CheckpointRecorder 与 Agent Loop Checkpoint 接入 MVP。
+15. LLMPlanner 与模型调用抽象 MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -76,7 +77,7 @@ runtime/executor.py
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
-第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint，尚未接真实 LLM
+第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint 与 LLMPlanner MVP，尚未接真实 LLM SDK
 第五阶段：尚未开始
 ```
 
@@ -85,7 +86,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议继续增强 Agent Loop，可优先接入真实 LLM Planner 或补充 Checkpoint 持久化与恢复。
+- 下一步如果继续按最终目标推进，建议进入 JSON DSL Runtime，或在保持解耦的前提下新增真实模型适配器。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -822,7 +823,7 @@ Planner 边界：
 
 - `Planner.plan(user_input, session)` 只负责返回下一步动作；
 - `FakePlanner` 只用于测试和离线演示，按预设动作顺序返回；
-- 后续接真实模型时，应新增 `LLMPlanner(Planner)`，避免修改 `ReActAgentLoop`。
+- 已新增 `LLMPlanner(Planner)`，后续接真实模型时应新增真实 `ModelClient` 适配器，避免修改 `ReActAgentLoop`。
 
 `ReActAgentLoop` 行为：
 
@@ -885,6 +886,65 @@ Agent Loop Checkpoint 行为：
 - 暂不做 Checkpoint 持久化；
 - 暂不做从 Checkpoint 恢复 Agent Loop；
 - 暂不做 checkpoint graph/tree。
+
+### 2.17 LLMPlanner 与模型调用抽象 MVP
+
+文件：
+
+```text
+my_agent/llm/__init__.py
+my_agent/llm/config.py
+my_agent/llm/client.py
+my_agent/llm/fake.py
+my_agent/agent_loop/llm_planner.py
+my_agent/agent_loop/__init__.py
+tests/test_llm_config.py
+tests/test_fake_model_client.py
+tests/test_llm_planner.py
+```
+
+完成：
+
+- `ModelConfig`
+- `ModelClient`
+- `FakeModelClient`
+- `LLMPlanner`
+
+`ModelConfig` 行为：
+
+- 只保存模型配置字段：`provider`、`model_name`、`api_key`、`base_url`、`temperature`、`max_tokens`、`timeout_seconds`；
+- 不读取环境变量；
+- 不读取配置文件；
+- 不调用模型服务。
+
+`ModelClient` 边界：
+
+- 使用抽象接口定义 `chat(messages, tool_definitions) -> dict[str, Any]`；
+- 只负责模型调用边界，不负责把响应解析为 `AgentAction`；
+- 当前不绑定 OpenAI、Qwen、DeepSeek 等具体 SDK。
+
+`FakeModelClient` 行为：
+
+- 按预设顺序返回模型响应字典；
+- 记录每次 chat 调用收到的 `messages` 和 `tool_definitions`；
+- 用于单元测试和离线演示；
+- 不依赖 Agent Loop 的动作模型。
+
+`LLMPlanner` 行为：
+
+- 只依赖 `ModelClient` 和 `ToolDefinition`；
+- 从 `SessionState.messages` 构造模型输入消息；
+- 将 `ToolDefinition` 转换为普通 dict 传给模型客户端；
+- 如果模型响应为 `{"type": "tool_call", ...}`，转换为 `ToolAction`；
+- 如果模型响应为 `{"type": "final_answer", ...}`，转换为 `FinalAnswerAction`；
+- 如果模型响应结构非法，抛出明确 `ValueError`。
+
+边界：
+
+- `LLMPlanner` 不依赖 `ModelConfig`；
+- `LLMPlanner` 不读取 `api_key`；
+- `ReActAgentLoop`、`ToolExecutor`、`SessionState`、`CheckpointRecorder` 都不包含模型配置字段；
+- 暂不实现真实模型调用、streaming、retry、token 统计或多模型路由。
 
 ## 3. 当前调用链
 
@@ -1006,6 +1066,8 @@ cc32286 新增RAG Trace与检索评估
 9eb6d3e 新增ToolExecutor工具调用Trace记录
 2ce3422 新增Checkpoint会话状态快照模型
 d047bf3 新增单步ReAct Agent Loop
+b4e4b74 新增多轮ReAct Agent Loop
+6b544cb 新增Agent Loop Checkpoint记录器
 ```
 
 当前建议提交信息：
@@ -1013,6 +1075,7 @@ d047bf3 新增单步ReAct Agent Loop
 ```text
 新增多轮ReAct Agent Loop
 新增Agent Loop Checkpoint记录器
+新增LLMPlanner模型规划器
 ```
 
 ## 5. 测试与环境
@@ -1040,7 +1103,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 101 tests in 0.005s
+Ran 114 tests in 0.006s
 OK
 ```
 
@@ -1095,31 +1158,33 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第四阶段的多轮 ReAct Agent Loop MVP 与 Checkpoint 接入 MVP 已完成。下一步建议继续增强 Agent Loop 的模型决策或恢复能力。
+当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。下一步建议进入第五阶段 JSON DSL Runtime，或补充真实模型适配器。
 
 建议新增或修改文件：
 
 ```text
-my_agent/agent_loop/planner.py
-my_agent/agent_loop/react.py
-tests/test_agent_loop.py
+my_agent/dsl/schema.py
+my_agent/dsl/loader.py
+my_agent/runtime/graph.py
+my_agent/runtime/executor.py
+tests/test_dsl_runtime.py
 ```
 
 目标：
 
-- 新增真实或半真实 `LLMPlanner(Planner)`，替换当前测试用 `FakePlanner` 的决策来源；
-- 继续保持 Planner 与具体 LLM 供应商解耦，第三方 SDK 类型不得扩散到 Agent Loop；
-- Agent Loop 仍应通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
-- 工具调用 Trace 和 Checkpoint 继续由现有 Recorder 边界写入。
+- 先实现最小 JSON DSL 数据模型和加载校验；
+- 把 Tool、Agent Loop、Trace、Checkpoint 能力包装进可执行节点；
+- Runtime 仍通过现有公开接口调用 Agent Loop 和 ToolExecutor；
+- 不把具体 LLM SDK、RAG 内部实现或存储细节写进 DSL Runtime。
 
 建议实现顺序：
 
 ```text
-1. 先定义 `LLMPlanner` 所需的最小模型调用接口或测试 Fake，避免 Agent Loop 直接依赖具体模型 SDK；
-2. 让 `LLMPlanner` 根据 `SessionState` 中的消息、tool observation 和可用工具定义生成 `AgentAction`；
-3. 保持 `Planner.plan(user_input, session)` 接口稳定；
-4. 为工具选择、最终回答和异常输出先写单元测试；
-5. 后续再考虑 Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
+1. 先定义 JSON DSL 的最小 schema，只覆盖当前已有能力；
+2. 实现 loader，把 dict / JSON 转成项目内部数据模型；
+3. 实现最小 runtime graph，只支持顺序执行或单节点执行；
+4. Runtime 节点通过依赖注入使用现有 ToolExecutor / ReActAgentLoop；
+5. 后续再考虑真实模型适配器、Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
 6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop 测试不回归。
 ```
 
