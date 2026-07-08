@@ -21,7 +21,8 @@
 5. TextChunker 文档切分；
 6. Chunk 向量化与内存向量索引；
 7. 混合召回、简单重排与引用构造；
-8. RetrievalTool 工具适配。
+8. RetrievalTool 工具适配；
+9. RAG Trace 与 Retrieval Test。
 ```
 
 ## 2. 已完成内容
@@ -491,6 +492,79 @@ Tool Schema：
 - RetrievalTool 不负责索引写入；
 - RetrievalTool 不直接管理 ToolRegistry 或 ToolExecutor。
 
+### 2.13 RAG Trace 与 Retrieval Test
+
+文件：
+
+```text
+my_agent/rag/trace.py
+my_agent/rag/eval.py
+tests/test_rag_eval.py
+```
+
+完成：
+
+- `RagTrace`
+- `RetrievalTestCase`
+- `RetrievalEvalResult`
+- `RetrievalEvaluator`
+
+RagTrace 字段：
+
+```text
+query
+retrieved_chunks
+citations
+duration_ms
+```
+
+RetrievalTestCase 字段：
+
+```text
+query
+expected_doc_ids
+expected_chunk_keywords
+top_k
+```
+
+RetrievalEvalResult 字段：
+
+```text
+hit
+matched_doc_ids
+missing_doc_ids
+top_chunks
+trace
+failure_reasons
+```
+
+RetrievalEvaluator 行为：
+
+- 通过 `RetrievalTool.run({"query": ..., "top_k": ...})` 执行检索；
+- 记录 `RagTrace`，包括 query、召回 chunks、citations 和 duration_ms；
+- 按 `expected_doc_ids` 判断命中文档；
+- 按 `expected_chunk_keywords` 判断召回内容是否包含期望关键词；
+- 返回 `matched_doc_ids`、`missing_doc_ids` 和 `top_chunks`；
+- 生成可读的 `failure_reasons`，用于定位召回失败原因。
+
+当前 failure_reasons 支持：
+
+- `missing_doc_ids: ...`
+- `missing_chunk_keywords: ...`
+- `keyword_score 全低：关键词召回可能失败`
+- `vector_score 全低：Embedding 表达可能不足`
+- `final_score 全低：融合分数可能异常`
+- `citations 缺失：引用构造可能失败`
+- `未召回任何 Chunk：知识库可能没有答案`
+
+边界：
+
+- Trace 只记录检索过程，不执行检索；
+- Evaluator 只执行测试和生成评估结论；
+- Evaluator 不负责构建索引；
+- Evaluator 不直接调用 Parser 或 Chunker；
+- 评估基于 RetrievalTool 的结构化返回，保证覆盖端到端工具链。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -554,6 +628,9 @@ RetrievalTool
         |
         v
 ToolRegistry / ToolExecutor
+        |
+        v
+RagTrace / RetrievalEvaluator
 ```
 
 ## 4. 当前提交历史
@@ -569,12 +646,13 @@ cf589cc 新增Markdown文档解析器
 7d90f10 新增文本切分器
 ffb1abc 新增Chunk向量化与内存索引
 3ee6074 新增混合召回重排与引用构造
+ad5b934 新增RetrievalTool工具适配
 ```
 
-当前 RetrievalTool 工具适配代码已完成，建议提交信息：
+当前 RAG Trace 与 Retrieval Test 代码已完成，建议提交信息：
 
 ```text
-新增RetrievalTool工具适配
+新增RAG Trace与检索评估
 ```
 
 ## 5. 测试与环境
@@ -602,7 +680,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 59 tests in 0.003s
+Ran 63 tests in 0.003s
 OK
 ```
 
@@ -666,24 +744,26 @@ Agentic RAG 后续按以下粒度推进：
 4. Chunk 向量化与内存向量索引：已完成
 5. 混合召回、重排和引用构造：已完成
 6. RetrievalTool：已完成
-7. RAG Trace 与 Retrieval Test：下一步
+7. RAG Trace 与 Retrieval Test：已完成
 ```
 
-下一步建议实现：
+后续增强建议：
 
 ```text
-my_agent/rag/trace.py
-my_agent/rag/eval.py
-tests/test_rag_eval.py
+1. 结构感知 Chunker
+2. EmbeddingModel / ChunkIndex 轻量协议
+3. 真实 Embedding 适配器或外部向量库适配器
+4. 更细粒度的 RAG Trace 阶段事件
+5. 更丰富的 Retrieval Test 数据集
 ```
 
-下一步目标：
+后续目标：
 
-- 定义 `RagTrace` 记录 query、retrieved_chunks、citations 和 duration_ms；
-- 定义 `RetrievalTestCase` 表达 query、expected_doc_ids、expected_chunk_keywords 和 top_k；
-- 定义 `RetrievalEvalResult` 返回 hit、matched_doc_ids、missing_doc_ids、top_chunks 和 trace；
-- `RetrievalEvaluator` 通过 RetrievalTool 或 Retriever 执行测试；
-- 评估失败时能解释关键词召回、向量召回、融合分数、重排和引用构造中的问题位置。
+- Chunker 从固定字符切分升级为 Markdown 结构感知切分；
+- Embedding 从确定性词袋升级为可替换模型适配器；
+- Index 从内存实现升级为可替换向量库适配器；
+- Trace 细化为 parse、chunk、embed、retrieve、rerank、citation 多阶段记录；
+- Retrieval Test 支持批量用例、指标汇总和失败原因统计。
 
 ## 8. 开发约束
 
@@ -732,6 +812,10 @@ Chunk 切分可这样讲：
 RetrievalTool 可这样讲：
 
 > 最后我把检索链路封装成标准 `retrieval.search` Tool。Tool 层只负责参数 schema、默认值、边界校验和结果格式化，真正的召回、重排和引用构造仍然由 Retriever、Reranker、CitationBuilder 各自负责。这样 Agent 只需要通过 `ToolExecutor` 调用工具，不需要知道知识库内部是怎么检索和排序的。
+
+RAG Trace 与评估可这样讲：
+
+> 在检索闭环之后，我补了 `RagTrace` 和 `RetrievalEvaluator`。Trace 记录每次检索的 query、召回 chunks、citations 和耗时；Evaluator 用 `RetrievalTestCase` 表达期望命中的文档和关键词，再输出 hit、missing_doc_ids、top_chunks 和 failure_reasons。这样当 RAG 没召回对时，不只是知道失败，还能定位是文档没命中、关键词没覆盖、分数全低、引用缺失，还是知识库本身没有答案。
 
 Agentic RAG 可这样讲：
 
