@@ -26,7 +26,7 @@
 10. State + Trace MVP；
 11. ToolExecutor 可选写入全局工具调用 Trace；
 12. Checkpoint MVP；
-13. 单步 Agent Loop MVP。
+13. 多轮 ReAct Agent Loop MVP。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -75,7 +75,7 @@ runtime/executor.py
 第一阶段：基本完成
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
-第四阶段：单步 Agent Loop MVP 已完成，尚未接真实 LLM 与多步 ReAct
+第四阶段：多轮 ReAct Agent Loop MVP 已完成，尚未接真实 LLM 与 Checkpoint
 第五阶段：尚未开始
 ```
 
@@ -84,7 +84,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议增强 Agent Loop，优先接入 Checkpoint 或升级为多步 ReAct 循环。
+- 下一步如果继续按最终目标推进，建议为 Agent Loop 接入 Checkpoint，增强可恢复性和状态快照能力。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -783,7 +783,7 @@ list_tool_traces()
 - `list_messages()` 和 `list_tool_traces()` 返回列表浅拷贝，避免调用方直接清空内部列表；
 - 当前未做 `metadata` 深拷贝，后续如果需要严格不可变快照，可再升级为深拷贝或序列化快照。
 
-### 2.15 单步 Agent Loop MVP
+### 2.15 多轮 ReAct Agent Loop MVP
 
 文件：
 
@@ -826,15 +826,18 @@ Planner 边界：
 `ReActAgentLoop` 行为：
 
 - `run(user_input)` 会先写入 user message；
-- 如果 Planner 返回 `FinalAnswerAction`，则写入 assistant message 并直接返回答案；
-- 如果 Planner 返回 `ToolAction`，则通过 `ToolExecutor` 执行工具；
+- 每轮调用一次 `Planner.plan(user_input, session)`，最多执行 `max_rounds` 轮 Planner 决策；
+- 如果 Planner 返回 `FinalAnswerAction`，则写入 assistant message 并返回最终答案；
+- 如果 Planner 返回 `ToolAction`，则通过 `ToolExecutor` 执行工具，并把工具结果作为 observation message 写回 `SessionState`；
 - `ToolAction.call_id` 为空时，Agent Loop 会生成新的调用编号；
-- 工具调用结果会被压缩为 assistant message 摘要，避免把完整 RAG chunks/citations 直接塞进对话；
+- 工具 observation 使用 `metadata["message_type"] = "tool_observation"` 标记，便于后续 Planner 区分普通助手消息与工具观测；
+- 工具调用结果会被压缩为 observation 摘要，避免把完整 RAG chunks/citations 直接塞进对话；
 - 工具调用 Trace 仍由 `ToolExecutor + TraceRecorder` 自动写入 `SessionState`。
 
 边界：
 
-- 当前是单步 ReAct MVP，不做多步 while 循环；
+- 当前每轮只支持一个 `ToolAction`，后续并发 tool-calling 可扩展为一轮返回多个工具动作；
+- 当前只限制 `max_rounds`，暂不引入 `max_tool_calls`，等并发 tool-calling 实现时再补充工具总调用数限制；
 - 当前不接真实 LLM；
 - 当前不自动创建 Checkpoint；
 - 当前不做 Memory、Human-in-the-loop 或 JSON DSL Runtime；
@@ -956,12 +959,16 @@ ffb1abc 新增Chunk向量化与内存索引
 ad5b934 新增RetrievalTool工具适配
 cc32286 新增RAG Trace与检索评估
 71761fc 重组RAG目录结构
+1b7bfe3 新增State与工具调用Trace基础模型
+9eb6d3e 新增ToolExecutor工具调用Trace记录
+2ce3422 新增Checkpoint会话状态快照模型
+d047bf3 新增单步ReAct Agent Loop
 ```
 
-当前 State + Trace MVP 代码已完成，建议提交信息：
+当前建议提交信息：
 
 ```text
-新增单步ReAct Agent Loop
+新增多轮ReAct Agent Loop
 ```
 
 ## 5. 测试与环境
@@ -989,7 +996,7 @@ python -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 90 tests in 0.004s
+Ran 93 tests in 0.006s
 OK
 ```
 
@@ -1044,32 +1051,34 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第四阶段的单步 Agent Loop MVP 已完成。下一步建议继续增强 Agent Loop。
+当前第四阶段的多轮 ReAct Agent Loop MVP 已完成。下一步建议继续增强 Agent Loop 的 Checkpoint 能力。
 
 建议新增或修改文件：
 
 ```text
-my_agent/agent_loop/planner.py
+my_agent/state/checkpoint_recorder.py
+my_agent/state/__init__.py
 my_agent/agent_loop/react.py
 tests/test_agent_loop.py
+tests/test_checkpoint_recorder.py
 ```
 
 目标：
 
-- Agent Loop v2 可选择接入 Checkpoint，在用户输入后、工具调用后或最终回答前创建快照；
-- 或者升级为多步 ReAct 循环，让 Planner 可以连续返回多个 `ToolAction`，直到 `FinalAnswerAction`；
-- 两条路线都应继续保持 Planner 与具体 LLM 解耦；
+- Agent Loop 可选接入 Checkpoint，在用户输入后、工具 observation 后和最终回答后创建快照；
+- Checkpoint 接入应通过轻量记录器或注入式依赖完成，避免让 Agent Loop 直接承担快照存储职责；
+- 继续保持 Planner 与具体 LLM 解耦；
 - Agent Loop 仍应通过 `ToolExecutor` 调用工具，不直接依赖具体工具实现；
 - 工具调用 Trace 仍由现有 `ToolExecutor + TraceRecorder` 自动写入。
 
 建议实现顺序：
 
 ```text
-1. 如果优先增强可恢复性，先为 Agent Loop v2 接入 Checkpoint 列表；
-2. 如果优先增强 Agent 能力，先升级为多步 ReAct 循环；
-3. 多步循环应设置 max_steps，避免 Planner 一直返回 ToolAction 导致无限循环；
-4. 多步循环应把每次工具结果作为 observation 传回 Planner；
-5. 后续再新增 LLMPlanner，替换 FakePlanner 的决策来源；
+1. 先新增轻量 CheckpointRecorder，只负责从 SessionState 创建并保存内存快照；
+2. ReActAgentLoop 可选接收 checkpoint_recorder，未传入时保持现有行为；
+3. 在 after_user_input、after_tool_observation、after_final_answer 三个阶段记录 checkpoint；
+4. 每个 checkpoint metadata 写入 reason、round_index 等最小必要信息；
+5. 后续再考虑文件持久化、数据库存储或从 checkpoint 恢复；
 6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop 测试不回归。
 ```
 

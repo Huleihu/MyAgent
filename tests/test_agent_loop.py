@@ -68,10 +68,13 @@ class AgentLoopTest(unittest.TestCase):
         self.assertEqual(messages[1].role, "assistant")
         self.assertEqual(messages[1].content, "这是最终回答")
 
-    def test_tool_action_executes_tool_and_records_trace_with_generated_call_id(self):
+    def test_tool_action_adds_observation_then_continues_to_final_answer(self):
         session = SessionState(session_id="session-1")
         planner = FakePlanner(
-            [ToolAction(tool_name="calculator.add", arguments={"a": 1, "b": 2})]
+            [
+                ToolAction(tool_name="calculator.add", arguments={"a": 1, "b": 2}),
+                FinalAnswerAction(answer="最终答案是 3"),
+            ]
         )
         agent_loop = ReActAgentLoop(
             planner=planner,
@@ -83,10 +86,14 @@ class AgentLoopTest(unittest.TestCase):
 
         messages = session.list_messages()
         traces = session.list_tool_traces()
-        self.assertIn("工具 calculator.add 执行成功", answer)
-        self.assertIn('"result": 3', answer)
-        self.assertEqual(messages[-1].role, "assistant")
-        self.assertEqual(messages[-1].content, answer)
+        self.assertEqual(answer, "最终答案是 3")
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[1].role, "assistant")
+        self.assertIn("工具 calculator.add 执行成功", messages[1].content)
+        self.assertEqual(messages[1].metadata["message_type"], "tool_observation")
+        self.assertEqual(messages[1].metadata["tool_name"], "calculator.add")
+        self.assertTrue(messages[1].metadata["success"])
+        self.assertEqual(messages[-1].content, "最终答案是 3")
         self.assertEqual(len(traces), 1)
         self.assertEqual(traces[0].tool_name, "calculator.add")
         self.assertIsNotNone(traces[0].call_id)
@@ -100,7 +107,8 @@ class AgentLoopTest(unittest.TestCase):
                     tool_name="calculator.add",
                     arguments={"a": 2, "b": 5},
                     call_id="planner-call-1",
-                )
+                ),
+                FinalAnswerAction(answer="最终答案是 7"),
             ]
         )
         agent_loop = ReActAgentLoop(
@@ -117,7 +125,10 @@ class AgentLoopTest(unittest.TestCase):
     def test_tool_failure_returns_failure_summary_and_records_error_trace(self):
         session = SessionState(session_id="session-1")
         planner = FakePlanner(
-            [ToolAction(tool_name="calculator.add", arguments={"a": 1})]
+            [
+                ToolAction(tool_name="calculator.add", arguments={"a": 1}),
+                FinalAnswerAction(answer="无法完成计算"),
+            ]
         )
         agent_loop = ReActAgentLoop(
             planner=planner,
@@ -128,8 +139,10 @@ class AgentLoopTest(unittest.TestCase):
         answer = agent_loop.run("计算缺少参数")
 
         trace = session.list_tool_traces()[0]
-        self.assertIn("工具 calculator.add 执行失败", answer)
-        self.assertIn("ToolValidationError", answer)
+        messages = session.list_messages()
+        self.assertEqual(answer, "无法完成计算")
+        self.assertIn("工具 calculator.add 执行失败", messages[1].content)
+        self.assertIn("ToolValidationError", messages[1].content)
         self.assertFalse(trace.success)
         self.assertEqual(trace.error["type"], "ToolValidationError")
 
@@ -147,6 +160,62 @@ class AgentLoopTest(unittest.TestCase):
         self.assertEqual(answer, "来自接口的回答")
         self.assertEqual(planner.seen_user_input, "接口测试")
         self.assertIs(planner.seen_session, session)
+
+    def test_multiple_tool_actions_run_across_planner_rounds(self):
+        session = SessionState(session_id="session-1")
+        planner = FakePlanner(
+            [
+                ToolAction(tool_name="calculator.add", arguments={"a": 1, "b": 2}),
+                ToolAction(tool_name="calculator.add", arguments={"a": 3, "b": 4}),
+                FinalAnswerAction(answer="两次计算已完成"),
+            ]
+        )
+        agent_loop = ReActAgentLoop(
+            planner=planner,
+            tool_executor=build_executor(session),
+            session_state=session,
+            max_rounds=3,
+        )
+
+        answer = agent_loop.run("分别计算两组数字")
+
+        messages = session.list_messages()
+        traces = session.list_tool_traces()
+        self.assertEqual(answer, "两次计算已完成")
+        self.assertEqual(len(traces), 2)
+        self.assertEqual(messages[1].metadata["message_type"], "tool_observation")
+        self.assertEqual(messages[2].metadata["message_type"], "tool_observation")
+        self.assertEqual(messages[-1].content, "两次计算已完成")
+
+    def test_max_rounds_limits_planner_decisions(self):
+        session = SessionState(session_id="session-1")
+        planner = FakePlanner(
+            [
+                ToolAction(tool_name="calculator.add", arguments={"a": 1, "b": 1}),
+                ToolAction(tool_name="calculator.add", arguments={"a": 2, "b": 2}),
+            ]
+        )
+        agent_loop = ReActAgentLoop(
+            planner=planner,
+            tool_executor=build_executor(session),
+            session_state=session,
+            max_rounds=1,
+        )
+
+        with self.assertRaises(ValueError):
+            agent_loop.run("持续调用工具")
+
+    def test_max_rounds_must_be_positive_integer(self):
+        session = SessionState(session_id="session-1")
+        planner = FakePlanner([FinalAnswerAction(answer="不会执行")])
+
+        with self.assertRaises(ValueError):
+            ReActAgentLoop(
+                planner=planner,
+                tool_executor=build_executor(session),
+                session_state=session,
+                max_rounds=0,
+            )
 
 
 if __name__ == "__main__":

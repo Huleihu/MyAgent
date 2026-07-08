@@ -1,5 +1,5 @@
 """
-本文件负责实现单步 ReAct Agent Loop MVP。
+本文件负责实现多轮 ReAct Agent Loop MVP。
 本文件不实现真实 LLM 调用，也不直接依赖具体工具业务逻辑。
 """
 
@@ -15,13 +15,13 @@ from my_agent.tools.schema import ToolCallRequest, ToolCallResult
 
 
 class ReActAgentLoop:
-    """单步 ReAct Agent Loop MVP。
+    """多轮 ReAct Agent Loop MVP。
 
-    第一版只支持一次 Planner 决策：
+    每一轮只支持一个 Planner 动作：
     - FinalAnswerAction：直接回答；
-    - ToolAction：执行一次工具并返回结果摘要。
+    - ToolAction：执行一次工具，把结果作为 observation 写回会话。
 
-    后续再扩展为多步 Thought-Action-Observation 循环。
+    后续支持并发 tool-calling 时，可把一轮扩展为多个 ToolAction。
     """
 
     def __init__(
@@ -29,6 +29,7 @@ class ReActAgentLoop:
         planner: Planner,
         tool_executor: ToolExecutor,
         session_state: SessionState,
+        max_rounds: int = 5,
     ) -> None:
         if not isinstance(planner, Planner):
             raise TypeError("planner must be a Planner")
@@ -36,38 +37,36 @@ class ReActAgentLoop:
             raise TypeError("tool_executor must be a ToolExecutor")
         if not isinstance(session_state, SessionState):
             raise TypeError("session_state must be a SessionState")
+        if not isinstance(max_rounds, int) or max_rounds <= 0:
+            raise ValueError("max_rounds must be a positive integer")
 
         self._planner = planner
         self._tool_executor = tool_executor
         self._session_state = session_state
+        self._max_rounds = max_rounds
 
     def run(self, user_input: str) -> str:
-        """执行一次单步 Agent Loop，并返回助手输出文本。"""
+        """执行多轮 Agent Loop，并返回最终助手输出文本。"""
         if not isinstance(user_input, str) or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
 
         self._session_state.add_message("user", user_input)
-        action = self._planner.plan(user_input, self._session_state)
 
-        if isinstance(action, FinalAnswerAction):
-            self._session_state.add_message("assistant", action.answer)
-            return action.answer
+        for _round_index in range(self._max_rounds):
+            action = self._planner.plan(user_input, self._session_state)
 
-        if isinstance(action, ToolAction):
-            result = self._execute_tool_action(action)
-            message = self._format_tool_result_message(result)
-            self._session_state.add_message(
-                "assistant",
-                message,
-                metadata={
-                    "tool_name": result.name,
-                    "call_id": result.call_id,
-                    "success": result.success,
-                },
-            )
-            return message
+            if isinstance(action, FinalAnswerAction):
+                self._session_state.add_message("assistant", action.answer)
+                return action.answer
 
-        raise ValueError("unsupported agent action")
+            if isinstance(action, ToolAction):
+                result = self._execute_tool_action(action)
+                self._add_tool_observation(result)
+                continue
+
+            raise ValueError("unsupported agent action")
+
+        raise ValueError("Agent Loop exceeded max_rounds before final answer")
 
     def _execute_tool_action(self, action: ToolAction) -> ToolCallResult:
         """执行工具动作，并在缺少 call_id 时生成稳定可追踪的调用编号。"""
@@ -87,3 +86,16 @@ class ReActAgentLoop:
 
         error_text = json.dumps(result.error, ensure_ascii=False, sort_keys=True)
         return f"工具 {result.name} 执行失败，错误：{error_text}"
+
+    def _add_tool_observation(self, result: ToolCallResult) -> None:
+        """把工具执行结果作为 observation 写入会话，供下一轮 Planner 使用。"""
+        self._session_state.add_message(
+            "assistant",
+            self._format_tool_result_message(result),
+            metadata={
+                "message_type": "tool_observation",
+                "tool_name": result.name,
+                "call_id": result.call_id,
+                "success": result.success,
+            },
+        )
