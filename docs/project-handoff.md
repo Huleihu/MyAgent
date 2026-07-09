@@ -29,6 +29,7 @@
 13. 多轮 ReAct Agent Loop MVP。
 14. CheckpointRecorder 与 Agent Loop Checkpoint 接入 MVP。
 15. LLMPlanner 与模型调用抽象 MVP。
+16. JSON DSL Runtime v0.1，支持 begin -> agent_loop -> message 线性流程。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -78,7 +79,7 @@ runtime/executor.py
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
 第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint 与 LLMPlanner MVP，尚未接真实 LLM SDK
-第五阶段：尚未开始
+第五阶段：JSON DSL Runtime v0.1 已完成，当前只支持 begin -> agent_loop -> message
 ```
 
 说明：
@@ -86,7 +87,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议进入 JSON DSL Runtime，或在保持解耦的前提下新增真实模型适配器。
+- 下一步如果继续按最终目标推进，建议在 JSON DSL Runtime v0.1 基础上补充更完整的 Runtime Trace 或真实模型适配器。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -946,6 +947,54 @@ tests/test_llm_planner.py
 - `ReActAgentLoop`、`ToolExecutor`、`SessionState`、`CheckpointRecorder` 都不包含模型配置字段；
 - 暂不实现真实模型调用、streaming、retry、token 统计或多模型路由。
 
+### 2.18 JSON DSL Runtime v0.1
+
+文件：
+
+```text
+my_agent/dsl/__init__.py
+my_agent/dsl/schema.py
+my_agent/dsl/loader.py
+my_agent/runtime/__init__.py
+my_agent/runtime/context.py
+my_agent/runtime/graph.py
+my_agent/runtime/node_runner.py
+my_agent/runtime/executor.py
+tests/test_dsl_runtime.py
+```
+
+完成：
+
+- `WorkflowDefinition`
+- `NodeDefinition`
+- `EdgeDefinition`
+- `WorkflowLoader`
+- `RuntimeGraph`
+- `RuntimeContext`
+- `BeginNodeRunner`
+- `AgentLoopNodeRunner`
+- `MessageNodeRunner`
+- `RuntimeExecutor`
+
+JSON DSL v0.1 支持：
+
+- 只支持 `begin`、`agent_loop`、`message` 三类节点；
+- 只支持单入口、单出口、无分支的线性拓扑；
+- 支持 `{{user_input}}` 和 `{{node_id.output_key}}` 这种最小精确引用；
+- `agent_loop` 节点通过 `AgentLoopNodeRunner` 构造参数注入已有 `ReActAgentLoop`；
+- `RuntimeExecutor` 只负责按 `RuntimeGraph.linear_nodes()` 调度节点执行器，并把节点输出写入 `RuntimeContext.node_outputs`。
+
+边界：
+
+- `dsl/schema.py` 只定义 DSL 数据模型；
+- `dsl/loader.py` 只负责加载和校验 DSL；
+- `runtime/graph.py` 只负责线性拓扑；
+- `runtime/context.py` 只保存 `user_input`、`variables`、`node_outputs` 和 `session_state`；
+- `runtime/node_runner.py` 只实现 v0.1 三类节点的执行；
+- `runtime/executor.py` 不直接依赖 `ToolExecutor`、RAG、LLM SDK 或具体 Agent Loop 实现；
+- 当前不实现 `tool_call`、`switch`、`loop`、并发、恢复或复杂变量表达式；
+- Tool Call 仍然发生在 `ReActAgentLoop` 内部，由 Planner / LLMPlanner 产生 `ToolAction`，再交给 `ToolExecutor` 执行。
+
 ## 3. 当前调用链
 
 Tool 调用链：
@@ -1097,21 +1146,21 @@ pip install -r requirements.txt
 当前测试命令：
 
 ```bash
-python -m unittest discover -v
+C:\Users\admin\Anaconda3\envs\myagent-py311\python.exe -m unittest discover -v
 ```
 
 最近一次完整测试结果：
 
 ```text
-Ran 114 tests in 0.006s
+Ran 119 tests in 0.007s
 OK
 ```
 
 说明：
 
-- Codex 当前默认 `python` 曾显示为 Python 3.7.4；
+- Codex 当前默认 `python` 曾显示为 Python 3.7.4，项目级 VS Code 配置已指向 `myagent-py311`；
 - 用户已经在本地激活 `myagent-py311` 并确认 requirements 已安装；
-- 后续建议用户在 `myagent-py311` 环境中运行测试。
+- 后续建议直接使用 `myagent-py311` 的 `python.exe` 运行测试，避免 `conda run` 启动开销。
 
 ## 6. 可维护性与后续增强建议
 
@@ -1158,7 +1207,7 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。下一步建议进入第五阶段 JSON DSL Runtime，或补充真实模型适配器。
+当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程。
 
 建议新增或修改文件：
 
@@ -1166,26 +1215,26 @@ OK
 my_agent/dsl/schema.py
 my_agent/dsl/loader.py
 my_agent/runtime/graph.py
+my_agent/runtime/context.py
+my_agent/runtime/node_runner.py
 my_agent/runtime/executor.py
 tests/test_dsl_runtime.py
 ```
 
-目标：
+已完成目标：
 
-- 先实现最小 JSON DSL 数据模型和加载校验；
-- 把 Tool、Agent Loop、Trace、Checkpoint 能力包装进可执行节点；
-- Runtime 仍通过现有公开接口调用 Agent Loop 和 ToolExecutor；
+- 实现最小 JSON DSL 数据模型和加载校验；
+- Runtime 通过已有公开接口调用注入的 `ReActAgentLoop`；
+- Tool Call 仍保留在 `ReActAgentLoop` 内部，不实现固定 `tool_call` 节点；
 - 不把具体 LLM SDK、RAG 内部实现或存储细节写进 DSL Runtime。
 
-建议实现顺序：
+后续建议实现顺序：
 
 ```text
-1. 先定义 JSON DSL 的最小 schema，只覆盖当前已有能力；
-2. 实现 loader，把 dict / JSON 转成项目内部数据模型；
-3. 实现最小 runtime graph，只支持顺序执行或单节点执行；
-4. Runtime 节点通过依赖注入使用现有 ToolExecutor / ReActAgentLoop；
-5. 后续再考虑真实模型适配器、Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
-6. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop 测试不回归。
+1. 为 Runtime 增加更细粒度执行 Trace；
+2. 在保持线性拓扑的前提下补充更完整的输入引用校验；
+3. 后续再考虑真实模型适配器、Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
+4. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop/DSL Runtime 测试不回归。
 ```
 
 暂缓事项：
@@ -1193,6 +1242,8 @@ tests/test_dsl_runtime.py
 - 暂不做 Memory；
 - 暂不做 Checkpoint 持久化和自动恢复；
 - 暂不做 Human-in-the-loop 暂停恢复；
+- 暂不做 `tool_call` 节点，工具调用仍由 ReActAgentLoop 内部处理；
+- 暂不做 switch、loop、并发和复杂变量表达式；
 - 暂不做复杂节点执行路径 Trace，等 Agent Loop MVP 跑通后再细化；
 - 暂不把 RAG 专用 `RagTrace` 合并进全局 Trace，避免混淆评估 Trace 与 Runtime Trace。
 
