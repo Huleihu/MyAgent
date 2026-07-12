@@ -36,15 +36,14 @@
 主要缺口：
 
 - 变量引用还很弱，只支持精确引用，不支持输入默认值、变量命名空间或错误定位；
-- 组件输入输出映射已有解析与执行分层，但还缺少显式的输入输出契约校验；
+- 对话触发模式已支持同一进程内复用会话状态的最小连续多轮，但不支持持久化恢复或并发；
 - 多节点协同当前已有线性顺序执行和节点级执行记录，但还没有分支、循环或并发；
-- 对话触发模式尚未实现，目前是直接调用 `RuntimeExecutor.run(context)`；
 - 暂不支持分支、循环、并发和可视化 Canvas，但这些不是下一步优先级。
 
 建议下一步：
 
-- 优先增强输入引用校验，让 DSL 错误能在加载或执行时给出明确原因；
-- 之后再考虑 `ConversationRuntime` 或 `ChatTrigger`，把用户消息触发 Runtime 执行这件事封装成独立入口。
+- 后续可考虑把 `ConversationRuntime` 作为 CLI、Web API 或 Canvas 的统一触发入口；
+- 暂不为单进程最小多轮引入 Memory、持久化恢复或并发会话管理。
 
 #### 目标二：Agentic RAG Tool
 
@@ -136,8 +135,8 @@
 
 建议下一步：
 
-- 第一优先级是输入输出映射与变量引用校验；
-- 第二优先级是基于节点 Trace 的 Runtime Eval 数据结构；
+- 第一优先级是基于节点 Trace 的 Runtime Eval 数据结构；
+- 第二优先级是把现有 `ConversationRuntime` 接入 CLI、Web API 或 Canvas 演示入口；
 - Memory、持久化恢复和 Human-in-the-loop 放到 Trace 基础稳定之后。
 
 当前已经完成：
@@ -209,7 +208,7 @@ runtime/executor.py
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
 第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint 与 LLMPlanner MVP，尚未接真实 LLM SDK
-第五阶段：JSON DSL Runtime v0.1 已完成，当前只支持 begin -> agent_loop -> message，并已补充节点级 Trace
+第五阶段：JSON DSL Runtime v0.1 已完成，当前支持 begin -> agent_loop -> message、节点级 Trace、输入输出映射校验和最小连续多轮对话触发
 ```
 
 说明：
@@ -217,7 +216,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议在 JSON DSL Runtime v0.1 基础上补充输入输出映射校验或真实模型适配器。
+- 下一步如果继续按最终目标推进，建议在 JSON DSL Runtime v0.1 基础上补充 Runtime Eval 数据结构或真实模型适配器。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -1294,7 +1293,7 @@ conda run -n myagent-py311 python -m unittest discover -s tests -v
 最近一次完整测试结果：
 
 ```text
-Ran 132 tests in 0.006s
+Ran 138 tests in 0.006s
 OK
 ```
 
@@ -1351,7 +1350,7 @@ OK
 
 当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射和变量引用校验。下一步不要急着扩展 `tool_call`、switch、loop 或并发，优先提供最小对话触发入口。
+结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验和最小连续多轮对话触发。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先补齐更便于演示的 Runtime Eval 数据结构或结构感知 Chunker。
 
 ### 7.1 已完成：Runtime 节点级 Trace
 
@@ -1406,23 +1405,26 @@ docs/project-handoff.md
 - 对缺失输入、未声明输入、引用不存在节点、引用不存在输出字段、引用后序节点和不支持引用格式给出可定位错误；
 - 只支持完整的 `{{user_input}}` 和 `{{node_id.output_key}}`，不实现模板插值或通用表达式语言；
 - Runner 删除必填输入的静默回退，合法 DSL 的执行行为保持不变；
-- 新增 DSL Runtime 覆盖测试后，完整 unittest 通过（132 项）。
+- 新增 DSL Runtime 覆盖测试后，完整 unittest 通过（138 项）。
 
-### 7.3 下一步优先级：对话触发模式
+### 7.3 已完成：对话触发模式
 
 推荐新增或修改文件：
 
 ```text
 my_agent/runtime/conversation.py
 tests/test_runtime_conversation.py
+docs/project-handoff.md
 ```
 
 目标：
 
-- 封装一个轻量 `ConversationRuntime` 或 `ChatTrigger`；
-- 接收用户消息，创建或复用 `RuntimeContext`，触发 `RuntimeExecutor.run(context)`；
-- 返回 `last_message` 和必要的 trace 信息；
-- 支持多轮连续对话的最小入口，但不做 Memory 和 Human-in-the-loop。
+- 新增 `ConversationRuntime`，持有并复用 `SessionState`，每轮创建独立 `RuntimeContext`；
+- `chat(user_input)` 触发 `RuntimeExecutor.run(context)`，返回 `ConversationTurnResult`；
+- 回合结果返回最终文本、当前 Context、节点 Trace 快照和当前轮新增工具 Trace 快照；
+- 明确 `last_message` 是最终输出的前置约定，缺失或不是非空字符串时给出明确 `ValueError`；
+- 连续多轮可复用消息历史，且第一版只支持同一实例串行调用，不保证线程安全；
+- 不做持久化恢复、Memory、多用户会话、并发、Human-in-the-loop 或 Checkpoint 恢复。
 
 ### 7.4 后续候选方向
 
