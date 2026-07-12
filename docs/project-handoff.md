@@ -1100,6 +1100,7 @@ tests/test_dsl_runtime.py
 - `WorkflowDefinition`
 - `NodeDefinition`
 - `EdgeDefinition`
+- `NodeContract`
 - `WorkflowLoader`
 - `RuntimeGraph`
 - `RuntimeContext`
@@ -1114,6 +1115,9 @@ JSON DSL v0.1 支持：
 - 只支持 `begin`、`agent_loop`、`message` 三类节点；
 - 只支持单入口、单出口、无分支的线性拓扑；
 - 支持 `{{user_input}}` 和 `{{node_id.output_key}}` 这种最小精确引用；
+- 节点契约集中声明：`begin` 无 DSL 输入并输出 `user_input`，`agent_loop` 必填 `user_input` 并输出 `output`，`message` 必填 `content` 并输出 `content`；
+- Loader 在加载阶段校验完整连通性、节点必填输入和未声明输入，并校验引用节点、引用输出字段及前序执行顺序；
+- 完整引用允许去除外围空白；普通字符串中的花括号保持字面量，不支持模板插值；
 - `agent_loop` 节点通过 `AgentLoopNodeRunner` 构造参数注入已有 `ReActAgentLoop`；
 - `RuntimeExecutor` 只负责按 `RuntimeGraph.linear_nodes()` 调度节点执行器，并统一写入 `RuntimeContext.node_outputs` 和 `RuntimeContext.node_traces`；
 - 节点级 Trace 记录解析后的 `inputs`、`output`、`success`、结构化 `error` 和 `duration_ms`；
@@ -1121,8 +1125,8 @@ JSON DSL v0.1 支持：
 
 边界：
 
-- `dsl/schema.py` 只定义 DSL 数据模型；
-- `dsl/loader.py` 只负责加载和校验 DSL；
+- `dsl/schema.py` 只定义 DSL 数据模型和静态节点契约，不依赖 Runtime；
+- `dsl/loader.py` 只负责加载、线性拓扑和静态 DSL 校验；
 - `runtime/graph.py` 只负责线性拓扑；
 - `runtime/context.py` 只保存 `user_input`、`variables`、`node_outputs`、`node_traces` 和 `session_state`；
 - `runtime/resolver.py` 只负责解析运行时输入引用；
@@ -1284,13 +1288,13 @@ pip install -r requirements.txt
 当前测试命令：
 
 ```bash
-C:\Users\admin\Anaconda3\envs\myagent-py311\python.exe -m unittest discover -v
+conda run -n myagent-py311 python -m unittest discover -s tests -v
 ```
 
 最近一次完整测试结果：
 
 ```text
-Ran 122 tests in 0.007s
+Ran 132 tests in 0.006s
 OK
 ```
 
@@ -1347,7 +1351,7 @@ OK
 
 当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-结合当前简历目标，下一步不要急着扩展 `tool_call`、switch、loop 或并发。Runtime 当前已经能解释节点怎么执行、哪里失败、耗时多少、输入输出是什么；下一步更适合补齐输入输出映射和变量引用校验，让 DSL 错误更容易定位。
+结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射和变量引用校验。下一步不要急着扩展 `tool_call`、switch、loop 或并发，优先提供最小对话触发入口。
 
 ### 7.1 已完成：Runtime 节点级 Trace
 
@@ -1383,7 +1387,7 @@ docs/project-handoff.md
 - `RuntimeExecutor` 仍然只负责任务调度，不直接依赖 ToolExecutor、RAG、LLM SDK；
 - 完整 unittest 通过。
 
-### 7.2 下一步优先级：输入输出映射与变量引用校验
+### 7.2 已完成：输入输出映射与变量引用校验
 
 推荐新增或修改文件：
 
@@ -1392,16 +1396,19 @@ my_agent/dsl/schema.py
 my_agent/dsl/loader.py
 my_agent/runtime/node_runner.py
 tests/test_dsl_runtime.py
+docs/project-handoff.md
 ```
 
 目标：
 
-- 明确每类节点需要哪些输入字段，例如 `agent_loop.inputs.user_input`、`message.inputs.content`；
-- 对缺失输入、引用不存在节点、引用不存在输出字段给出明确错误；
-- 保持 v0.1 的精确引用形式，不做复杂表达式；
-- 将“组件输入输出映射”讲清楚，但不提前实现通用表达式语言。
+- 新增不可变 `NodeContract` 和只读节点契约表，声明每类节点的 `required_inputs`、`allowed_inputs`、`fixed_outputs`；
+- Loader 先校验结构、唯一入口/出口和完整连通性，再取得线性执行顺序并校验节点契约和输入引用；
+- 对缺失输入、未声明输入、引用不存在节点、引用不存在输出字段、引用后序节点和不支持引用格式给出可定位错误；
+- 只支持完整的 `{{user_input}}` 和 `{{node_id.output_key}}`，不实现模板插值或通用表达式语言；
+- Runner 删除必填输入的静默回退，合法 DSL 的执行行为保持不变；
+- 新增 DSL Runtime 覆盖测试后，完整 unittest 通过（132 项）。
 
-### 7.3 第三优先级：对话触发模式
+### 7.3 下一步优先级：对话触发模式
 
 推荐新增或修改文件：
 

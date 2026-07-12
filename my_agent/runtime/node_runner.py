@@ -21,8 +21,7 @@ class BeginNodeRunner:
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
         """返回 Runtime 初始用户输入。"""
-        user_input = inputs.get("user_input", context.user_input)
-        return {"user_input": user_input}
+        return {"user_input": context.user_input}
 
 
 class AgentLoopNodeRunner:
@@ -40,7 +39,7 @@ class AgentLoopNodeRunner:
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
         """调用已注入的 Agent Loop，并返回最终回答。"""
-        user_input = inputs.get("user_input", context.user_input)
+        user_input = inputs["user_input"]
         answer = self._agent_loop.run(user_input)
         return {"output": answer}
 
@@ -55,7 +54,7 @@ class MessageNodeRunner:
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
         """解析消息内容，并记录为 last_message。"""
-        content = inputs.get("content")
+        content = inputs["content"]
         if not isinstance(content, str) or not content.strip():
             raise ValueError("message content must be a non-empty string")
 

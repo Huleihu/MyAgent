@@ -83,6 +83,119 @@ class DslRuntimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             WorkflowLoader().load_dict(workflow_dict)
 
+    def test_loader_rejects_missing_required_agent_loop_input(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][1]["inputs"] = {}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=agent.*node_type=agent_loop.*user_input.*missing required input",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_missing_required_message_input(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"] = {}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=message.*node_type=message.*content.*missing required input",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_undeclared_message_input(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["title"] = "结果"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=message.*node_type=message.*title.*undeclared input",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_reference_to_missing_node(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["content"] = "{{missing.output}}"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=message.*node_type=message.*{{missing.output}}.*referenced node does not exist",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_reference_to_missing_output(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["content"] = "{{agent.answer}}"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=message.*node_type=message.*{{agent.answer}}.*output field does not exist",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_reference_to_later_node(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][1]["inputs"]["user_input"] = "{{message.content}}"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=agent.*node_type=agent_loop.*{{message.content}}.*later node",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_rejects_unsupported_reference_format(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["content"] = "{{ variables.x }}"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "node_id=message.*node_type=message.*{{ variables.x }}.*unsupported reference format",
+        ):
+            WorkflowLoader().load_dict(workflow_dict)
+
+    def test_loader_normalizes_outer_whitespace_for_exact_reference(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["content"] = "  {{agent.output}}  "
+
+        workflow = WorkflowLoader().load_dict(workflow_dict)
+
+        self.assertEqual(workflow.nodes[2].inputs["content"], "{{agent.output}}")
+
+    def test_loader_keeps_non_reference_braces_as_literal_text(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][2]["inputs"]["content"] = "结果为 {{agent.output}}。"
+
+        workflow = WorkflowLoader().load_dict(workflow_dict)
+
+        self.assertEqual(workflow.nodes[2].inputs["content"], "结果为 {{agent.output}}。")
+
+    def test_loader_rejects_disconnected_linear_graph(self):
+        workflow_dict = {
+            "workflow_id": "workflow-2",
+            "nodes": [
+                {"node_id": "begin", "node_type": "begin"},
+                {
+                    "node_id": "agent",
+                    "node_type": "agent_loop",
+                    "inputs": {"user_input": "{{user_input}}"},
+                },
+                {
+                    "node_id": "message",
+                    "node_type": "message",
+                    "inputs": {"content": "{{agent.output}}"},
+                },
+                {"node_id": "tail", "node_type": "begin"},
+            ],
+            "edges": [
+                {"source": "begin", "target": "agent"},
+                {"source": "agent", "target": "begin"},
+                {"source": "message", "target": "tail"},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "workflow.*cycle|workflow.*connected"):
+            WorkflowLoader().load_dict(workflow_dict)
+
     def test_graph_returns_linear_topology(self):
         workflow = WorkflowLoader().load_dict(build_workflow_dict())
         graph = RuntimeGraph(workflow)

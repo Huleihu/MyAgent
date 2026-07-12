@@ -6,13 +6,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 
 def _validate_non_empty_text(field_name: str, field_value: str) -> None:
     """校验 DSL 标识字段，避免生成不可追踪的工作流结构。"""
     if not isinstance(field_value, str) or not field_value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
+
+
+@dataclass(frozen=True)
+class NodeContract:
+    """描述一种 DSL 节点的静态输入输出契约。"""
+
+    required_inputs: frozenset[str]
+    allowed_inputs: frozenset[str]
+    fixed_outputs: frozenset[str]
+
+    def __post_init__(self) -> None:
+        """校验契约字段，确保 Loader 可安全进行静态校验。"""
+        contract_fields = {
+            "required_inputs": self.required_inputs,
+            "allowed_inputs": self.allowed_inputs,
+            "fixed_outputs": self.fixed_outputs,
+        }
+        for field_name, field_value in contract_fields.items():
+            if not isinstance(field_value, frozenset) or not all(
+                isinstance(item, str) and item.strip() for item in field_value
+            ):
+                raise ValueError(f"{field_name} must be a frozenset of non-empty strings")
+        if not self.required_inputs.issubset(self.allowed_inputs):
+            raise ValueError("required_inputs must be included in allowed_inputs")
+
+
+# 契约只表达 DSL 静态接口，不依赖 Runtime Runner 或执行对象。
+NODE_CONTRACTS: Mapping[str, NodeContract] = MappingProxyType(
+    {
+        "begin": NodeContract(frozenset(), frozenset(), frozenset({"user_input"})),
+        "agent_loop": NodeContract(
+            frozenset({"user_input"}),
+            frozenset({"user_input"}),
+            frozenset({"output"}),
+        ),
+        "message": NodeContract(
+            frozenset({"content"}),
+            frozenset({"content"}),
+            frozenset({"content"}),
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
