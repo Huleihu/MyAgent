@@ -53,6 +53,11 @@ def build_workflow_dict():
     }
 
 
+class FailingNodeRunner:
+    def run(self, node, context, inputs):
+        raise RuntimeError("boom")
+
+
 class DslRuntimeTest(unittest.TestCase):
     def test_loader_builds_workflow_definition_from_dict(self):
         workflow = WorkflowLoader().load_dict(build_workflow_dict())
@@ -111,6 +116,85 @@ class DslRuntimeTest(unittest.TestCase):
         self.assertEqual(context.node_outputs["message"], {"content": "Agent 已完成回答"})
         self.assertEqual(context.variables["last_message"], "Agent 已完成回答")
         self.assertEqual(session.list_messages()[-1].content, "Agent 已完成回答")
+
+    def test_runtime_executor_records_trace_for_successful_nodes(self):
+        session = SessionState(session_id="session-1")
+        context = RuntimeContext(user_input="请回答问题", session_state=session)
+        workflow = WorkflowLoader().load_dict(build_workflow_dict())
+        executor = RuntimeExecutor(
+            graph=RuntimeGraph(workflow),
+            node_runners={
+                "begin": BeginNodeRunner(),
+                "agent_loop": AgentLoopNodeRunner(build_agent_loop(session)),
+                "message": MessageNodeRunner(),
+            },
+        )
+
+        executor.run(context)
+
+        traces = context.list_node_traces()
+        self.assertEqual(len(traces), 3)
+        self.assertEqual(
+            [trace.node_id for trace in traces],
+            ["begin", "agent", "message"],
+        )
+        self.assertEqual(
+            [trace.node_type for trace in traces],
+            ["begin", "agent_loop", "message"],
+        )
+        self.assertTrue(all(trace.success for trace in traces))
+        self.assertTrue(all(trace.duration_ms >= 0 for trace in traces))
+        self.assertEqual(traces[0].output, {"user_input": "请回答问题"})
+        self.assertEqual(traces[1].output, {"output": "Agent 已完成回答"})
+        self.assertEqual(traces[2].output, {"content": "Agent 已完成回答"})
+
+    def test_runtime_executor_records_resolved_inputs_in_trace(self):
+        session = SessionState(session_id="session-1")
+        context = RuntimeContext(user_input="请回答问题", session_state=session)
+        workflow = WorkflowLoader().load_dict(build_workflow_dict())
+        executor = RuntimeExecutor(
+            graph=RuntimeGraph(workflow),
+            node_runners={
+                "begin": BeginNodeRunner(),
+                "agent_loop": AgentLoopNodeRunner(build_agent_loop(session)),
+                "message": MessageNodeRunner(),
+            },
+        )
+
+        executor.run(context)
+
+        message_trace = context.list_node_traces()[2]
+        self.assertEqual(message_trace.inputs, {"content": "Agent 已完成回答"})
+
+    def test_runtime_executor_records_failure_trace_and_reraises(self):
+        workflow_dict = build_workflow_dict()
+        workflow_dict["nodes"][1] = {
+            "node_id": "agent",
+            "node_type": "agent_loop",
+            "inputs": {"user_input": "{{user_input}}"},
+        }
+        workflow = WorkflowLoader().load_dict(workflow_dict)
+        context = RuntimeContext(user_input="请回答问题")
+        executor = RuntimeExecutor(
+            graph=RuntimeGraph(workflow),
+            node_runners={
+                "begin": BeginNodeRunner(),
+                "agent_loop": FailingNodeRunner(),
+                "message": MessageNodeRunner(),
+            },
+        )
+
+        with self.assertRaises(RuntimeError):
+            executor.run(context)
+
+        traces = context.list_node_traces()
+        self.assertEqual(len(traces), 2)
+        self.assertTrue(traces[0].success)
+        self.assertFalse(traces[-1].success)
+        self.assertEqual(traces[-1].node_id, "agent")
+        self.assertEqual(traces[-1].error["type"], "RuntimeError")
+        self.assertIn("boom", traces[-1].error["message"])
+        self.assertGreaterEqual(traces[-1].duration_ms, 0)
 
 
 if __name__ == "__main__":

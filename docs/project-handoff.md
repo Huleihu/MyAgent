@@ -11,6 +11,135 @@
 4. State、Memory、Checkpoint、Trace 与 Agent Eval 数据基础。
 ```
 
+### 1.0 简历目标对齐与当前差距
+
+当前开发应围绕以下四条简历描述推进。每一阶段都优先补齐真实可演示能力，避免为了简历关键词提前堆空架构。
+
+#### 目标一：JSON DSL Agent Runtime
+
+简历描述：
+
+```text
+参考 RAGFlow Agent Canvas 设计，实现基于 JSON DSL 的轻量级 Agent Runtime，
+支持节点编排、变量引用、组件输入输出映射、多节点协同执行，以及对话触发模式。
+```
+
+当前完成：
+
+- 已有 JSON DSL Runtime v0.1；
+- 已支持 `begin -> agent_loop -> message` 线性节点编排；
+- 已有最小变量引用：`{{user_input}}` 和 `{{node_id.output_key}}`；
+- 已通过 `RuntimeContext.node_outputs` 保存组件输出；
+- 已通过 `RuntimeContext.node_traces` 保存节点级执行 Trace；
+- `agent_loop` 节点通过依赖注入调用已有 `ReActAgentLoop`。
+
+主要缺口：
+
+- 变量引用还很弱，只支持精确引用，不支持输入默认值、变量命名空间或错误定位；
+- 组件输入输出映射已有解析与执行分层，但还缺少显式的输入输出契约校验；
+- 多节点协同当前已有线性顺序执行和节点级执行记录，但还没有分支、循环或并发；
+- 对话触发模式尚未实现，目前是直接调用 `RuntimeExecutor.run(context)`；
+- 暂不支持分支、循环、并发和可视化 Canvas，但这些不是下一步优先级。
+
+建议下一步：
+
+- 优先增强输入引用校验，让 DSL 错误能在加载或执行时给出明确原因；
+- 之后再考虑 `ConversationRuntime` 或 `ChatTrigger`，把用户消息触发 Runtime 执行这件事封装成独立入口。
+
+#### 目标二：Agentic RAG Tool
+
+简历描述：
+
+```text
+实现 Agentic RAG 链路，将 Retrieval 封装为 Agent 可调用 Tool，
+支持文档 Chunk 切分、Embedding 建库、关键词与向量混合召回、Rerank 接口、
+引用溯源和 Retrieval Test，提升知识库问答的相关性与可信度。
+```
+
+当前完成：
+
+- 已实现 Markdown Parser、`TextChunker`、`SimpleEmbeddingModel`、`InMemoryChunkIndex`；
+- 已实现关键词召回、向量召回、`HybridRetriever`、`SimpleReranker`、`CitationBuilder`；
+- 已封装 `retrieval.search` 为标准 Tool；
+- 已有 `RagTrace`、`RetrievalEvaluator` 和失败原因解释。
+
+主要缺口：
+
+- Chunker 仍是固定字符切分，不理解 Markdown 标题、段落、列表或代码块；
+- Embedding 仍是确定性词袋模型，不是真实 embedding 适配器；
+- Reranker 当前是接口占位式简单重排，还没有真实 rerank 服务适配；
+- Index 仍是内存实现，还没有外部向量库适配；
+- RAG Trace 还没有细化到 parse、chunk、embed、retrieve、rerank、citation 多阶段。
+
+建议下一步：
+
+- 在 Runtime Trace 后，再增强 RAG Trace 或结构感知 Chunker；
+- 暂不急着接真实向量库，先保持测试稳定和链路可讲清楚。
+
+#### 目标三：Agent Loop、Tool Calling 与 Plan-and-Execute
+
+简历描述：
+
+```text
+设计 Agent Loop 与标准化 Tool Calling 框架，参考 ReAct 思想实现
+“工具选择—工具调用—结果观察—下一步决策”的循环执行，并结合 Plan-and-Execute
+支持任务拆解、步骤规划、失败重试、反思修正和 MCP 扩展。
+```
+
+当前完成：
+
+- 已有标准化 Tool Calling 框架：ToolDefinition、ToolRegistry、ToolExecutor、ToolCallResult；
+- 已有多轮 `ReActAgentLoop`，支持 ToolAction、工具执行、observation、FinalAnswerAction；
+- 已有 `LLMPlanner` 与 `ModelClient` 抽象，真实模型 SDK 尚未接入；
+- 工具调用 Trace 已由 `ToolExecutor + TraceRecorder` 写入 Session。
+
+主要缺口：
+
+- Plan-and-Execute 还没有独立计划模型，例如任务拆解、步骤列表、步骤状态；
+- 失败重试当前没有策略对象，工具失败只作为 observation 返回；
+- 反思修正还没有独立动作或 Planner 协议；
+- MCP 扩展尚未实现，目前只有本地 Tool 抽象和 FunctionTool；
+- 真实 LLM SDK 适配器尚未实现。
+
+建议下一步：
+
+- 在 Runtime Trace 稳住之后，新增轻量 Plan-and-Execute 数据模型与 Planner；
+- 失败重试先做简单策略，例如最大重试次数和可重试错误类型；
+- MCP 适配等本地 Tool + Runtime + Trace 跑通后再接。
+
+#### 目标四：State、Memory、Checkpoint、Trace 与 Eval 数据
+
+简历描述：
+
+```text
+构建 State、Memory、Checkpoint 与 Trace 追踪模块，记录节点执行路径、
+工具调用结果、异常、耗时和 Token 消耗，支持上下文恢复、多轮连续对话
+与 Human-in-the-loop，并为 Agent Eval 提供链路数据依据。
+```
+
+当前完成：
+
+- 已有 `SessionState` 保存消息和工具调用 Trace；
+- 已有 `ToolTraceRecord` 记录工具名、参数、结果、错误、耗时；
+- 已有 `Checkpoint` 和 `CheckpointRecorder` 保存内存快照；
+- Agent Loop 已可选接入 checkpoint；
+- RAG Eval 已有检索测试与失败原因解释。
+
+主要缺口：
+
+- 已实现 Runtime 节点级 Trace，可记录节点执行路径、解析后的输入、输出、异常和耗时；
+- `token_usage` 字段存在但当前没有真实 LLM token 来源；
+- Memory 尚未实现；
+- Checkpoint 仍是内存快照，不支持持久化和恢复；
+- Human-in-the-loop 暂停、审批、恢复尚未实现；
+- Agent Eval 目前主要覆盖 RAG 检索，还没有统一 Runtime/Agent 评估数据。
+
+建议下一步：
+
+- 第一优先级是输入输出映射与变量引用校验；
+- 第二优先级是基于节点 Trace 的 Runtime Eval 数据结构；
+- Memory、持久化恢复和 Human-in-the-loop 放到 Trace 基础稳定之后。
+
 当前已经完成：
 
 ```text
@@ -30,6 +159,7 @@
 14. CheckpointRecorder 与 Agent Loop Checkpoint 接入 MVP。
 15. LLMPlanner 与模型调用抽象 MVP。
 16. JSON DSL Runtime v0.1，支持 begin -> agent_loop -> message 线性流程。
+17. Runtime 节点级 Trace，记录节点输入、输出、异常和耗时。
 ```
 
 ### 1.1 最终五阶段路线图与当前进度
@@ -79,7 +209,7 @@ runtime/executor.py
 第二阶段：已完成，并额外补充了 RAG Trace 与 Retrieval Test
 第三阶段：State / Trace / Checkpoint MVP 已完成
 第四阶段：多轮 ReAct Agent Loop MVP 已完成，已接入可选 Checkpoint 与 LLMPlanner MVP，尚未接真实 LLM SDK
-第五阶段：JSON DSL Runtime v0.1 已完成，当前只支持 begin -> agent_loop -> message
+第五阶段：JSON DSL Runtime v0.1 已完成，当前只支持 begin -> agent_loop -> message，并已补充节点级 Trace
 ```
 
 说明：
@@ -87,7 +217,7 @@ runtime/executor.py
 - 当前项目没有单独的 `core/models.py`，Tool 数据模型集中在 `tools/schema.py`，异常在 `core/errors.py`，抽象接口在 `core/interfaces.py`；
 - 当前已经有 `my_agent/rag/evaluation/trace.py` 和 `my_agent/rag/evaluation/eval.py`，它们只服务于 RAG 检索评估；
 - 第三阶段的 `state/trace.py` 和 `state/session.py` 应作为全局 Agent Runtime 的执行记录与会话状态模块，不应直接复用或混淆 RAG 专用 Trace；
-- 下一步如果继续按最终目标推进，建议在 JSON DSL Runtime v0.1 基础上补充更完整的 Runtime Trace 或真实模型适配器。
+- 下一步如果继续按最终目标推进，建议在 JSON DSL Runtime v0.1 基础上补充输入输出映射校验或真实模型适配器。
 
 ### 1.2 当前 RAG 目录结构
 
@@ -958,6 +1088,8 @@ my_agent/dsl/loader.py
 my_agent/runtime/__init__.py
 my_agent/runtime/context.py
 my_agent/runtime/graph.py
+my_agent/runtime/resolver.py
+my_agent/runtime/trace.py
 my_agent/runtime/node_runner.py
 my_agent/runtime/executor.py
 tests/test_dsl_runtime.py
@@ -971,6 +1103,7 @@ tests/test_dsl_runtime.py
 - `WorkflowLoader`
 - `RuntimeGraph`
 - `RuntimeContext`
+- `NodeExecutionRecord`
 - `BeginNodeRunner`
 - `AgentLoopNodeRunner`
 - `MessageNodeRunner`
@@ -982,17 +1115,22 @@ JSON DSL v0.1 支持：
 - 只支持单入口、单出口、无分支的线性拓扑；
 - 支持 `{{user_input}}` 和 `{{node_id.output_key}}` 这种最小精确引用；
 - `agent_loop` 节点通过 `AgentLoopNodeRunner` 构造参数注入已有 `ReActAgentLoop`；
-- `RuntimeExecutor` 只负责按 `RuntimeGraph.linear_nodes()` 调度节点执行器，并把节点输出写入 `RuntimeContext.node_outputs`。
+- `RuntimeExecutor` 只负责按 `RuntimeGraph.linear_nodes()` 调度节点执行器，并统一写入 `RuntimeContext.node_outputs` 和 `RuntimeContext.node_traces`；
+- 节点级 Trace 记录解析后的 `inputs`、`output`、`success`、结构化 `error` 和 `duration_ms`；
+- 节点失败时 Runtime 会先记录失败 Trace，再继续抛出原始异常。
 
 边界：
 
 - `dsl/schema.py` 只定义 DSL 数据模型；
 - `dsl/loader.py` 只负责加载和校验 DSL；
 - `runtime/graph.py` 只负责线性拓扑；
-- `runtime/context.py` 只保存 `user_input`、`variables`、`node_outputs` 和 `session_state`；
-- `runtime/node_runner.py` 只实现 v0.1 三类节点的执行；
-- `runtime/executor.py` 不直接依赖 `ToolExecutor`、RAG、LLM SDK 或具体 Agent Loop 实现；
+- `runtime/context.py` 只保存 `user_input`、`variables`、`node_outputs`、`node_traces` 和 `session_state`；
+- `runtime/resolver.py` 只负责解析运行时输入引用；
+- `runtime/trace.py` 只定义 Runtime 节点级执行记录；
+- `runtime/node_runner.py` 只实现 v0.1 三类节点的执行，不解析输入、不写 `node_outputs` 或 `node_traces`；
+- `runtime/executor.py` 不直接依赖 `ToolExecutor`、RAG、LLM SDK 或具体 Agent Loop 实现，只负责解析输入、调度 runner、写输出和写 Trace；
 - 当前不实现 `tool_call`、`switch`、`loop`、并发、恢复或复杂变量表达式；
+- 当前 Runtime Trace 不包含 `token_usage`、`checkpoint_id`、`session_id`、`traceback`、`retry_count`、LLM 信息或 ToolTrace 信息；
 - Tool Call 仍然发生在 `ReActAgentLoop` 内部，由 Planner / LLMPlanner 产生 `ToolAction`，再交给 `ToolExecutor` 执行。
 
 ## 3. 当前调用链
@@ -1152,7 +1290,7 @@ C:\Users\admin\Anaconda3\envs\myagent-py311\python.exe -m unittest discover -v
 最近一次完整测试结果：
 
 ```text
-Ran 119 tests in 0.007s
+Ran 122 tests in 0.007s
 OK
 ```
 
@@ -1207,35 +1345,85 @@ OK
 
 ## 7. 下一阶段计划
 
-当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程。
+当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-建议新增或修改文件：
+结合当前简历目标，下一步不要急着扩展 `tool_call`、switch、loop 或并发。Runtime 当前已经能解释节点怎么执行、哪里失败、耗时多少、输入输出是什么；下一步更适合补齐输入输出映射和变量引用校验，让 DSL 错误更容易定位。
+
+### 7.1 已完成：Runtime 节点级 Trace
+
+已新增或修改文件：
+
+```text
+my_agent/runtime/trace.py
+my_agent/runtime/context.py
+my_agent/runtime/resolver.py
+my_agent/runtime/node_runner.py
+my_agent/runtime/executor.py
+tests/test_dsl_runtime.py
+docs/project-handoff.md
+```
+
+完成内容：
+
+- 新增 `NodeExecutionRecord`，记录 `node_id`、`node_type`、`inputs`、`output`、`error`、`success`、`duration_ms`；
+- `RuntimeContext` 增加 `node_traces`，保存节点执行路径；
+- `RuntimeExecutor` 在每个节点执行前后记录 trace；
+- 节点成功和失败都要记录，失败时保留原始异常上下文；
+- `RuntimeExecutor` 统一负责解析 inputs、调用 runner、写 `node_outputs` 和写 `node_traces`；
+- `NodeRunner` 统一接收解析后的 inputs，只负责执行节点逻辑并返回 output；
+- `runtime/resolver.py` 负责 `{{user_input}}` 和 `{{node_id.output_key}}` 的运行时引用解析；
+- 不把 RAG 专用 `RagTrace` 混进 Runtime Trace；
+- 不让 Runtime Trace 直接依赖 ToolExecutor、LLM SDK 或具体 RAG 类型。
+
+已验证：
+
+- `begin -> agent_loop -> message` 三个节点都会生成 `NodeExecutionRecord`；
+- Trace 记录解析后的 inputs，而不是原始 DSL 表达式；
+- 失败节点会记录 `success=False` 和结构化错误，并继续抛出原始异常；
+- `RuntimeExecutor` 仍然只负责任务调度，不直接依赖 ToolExecutor、RAG、LLM SDK；
+- 完整 unittest 通过。
+
+### 7.2 下一步优先级：输入输出映射与变量引用校验
+
+推荐新增或修改文件：
 
 ```text
 my_agent/dsl/schema.py
 my_agent/dsl/loader.py
-my_agent/runtime/graph.py
-my_agent/runtime/context.py
 my_agent/runtime/node_runner.py
-my_agent/runtime/executor.py
 tests/test_dsl_runtime.py
 ```
 
-已完成目标：
+目标：
 
-- 实现最小 JSON DSL 数据模型和加载校验；
-- Runtime 通过已有公开接口调用注入的 `ReActAgentLoop`；
-- Tool Call 仍保留在 `ReActAgentLoop` 内部，不实现固定 `tool_call` 节点；
-- 不把具体 LLM SDK、RAG 内部实现或存储细节写进 DSL Runtime。
+- 明确每类节点需要哪些输入字段，例如 `agent_loop.inputs.user_input`、`message.inputs.content`；
+- 对缺失输入、引用不存在节点、引用不存在输出字段给出明确错误；
+- 保持 v0.1 的精确引用形式，不做复杂表达式；
+- 将“组件输入输出映射”讲清楚，但不提前实现通用表达式语言。
 
-后续建议实现顺序：
+### 7.3 第三优先级：对话触发模式
+
+推荐新增或修改文件：
 
 ```text
-1. 为 Runtime 增加更细粒度执行 Trace；
-2. 在保持线性拓扑的前提下补充更完整的输入引用校验；
-3. 后续再考虑真实模型适配器、Checkpoint 文件持久化、数据库存储或从 checkpoint 恢复；
-4. 跑完整 unittest，确认已有 Tool/RAG/State/Checkpoint/Agent Loop/DSL Runtime 测试不回归。
+my_agent/runtime/conversation.py
+tests/test_runtime_conversation.py
 ```
+
+目标：
+
+- 封装一个轻量 `ConversationRuntime` 或 `ChatTrigger`；
+- 接收用户消息，创建或复用 `RuntimeContext`，触发 `RuntimeExecutor.run(context)`；
+- 返回 `last_message` 和必要的 trace 信息；
+- 支持多轮连续对话的最小入口，但不做 Memory 和 Human-in-the-loop。
+
+### 7.4 后续候选方向
+
+- RAG 增强：结构感知 Chunker、真实 Embedding 适配器、真实 Rerank 适配器、RAG 多阶段 Trace；
+- Plan-and-Execute：任务拆解模型、步骤状态、失败重试、反思修正；
+- State 增强：Checkpoint 持久化、从 checkpoint 恢复；
+- Memory：先做简单内存记忆接口，再考虑检索式 Memory；
+- MCP 扩展：等本地 Tool、Runtime Trace 和 Plan-and-Execute 稳定后再接。
 
 暂缓事项：
 
