@@ -39,3 +39,10 @@ desktop.ini
 node_modules/
 frontend/.next/
 frontend/coverage/
+
+# 本地开发服务日志
+.backend-dev*.log
+frontend/.frontend-dev*.log
+
+# 视觉方案辅助页的本地草图与交互状态
+.superpowers/

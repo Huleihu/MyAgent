@@ -19,6 +19,8 @@ type ConversationState = {
 };
 
 const initialState: Pick<ConversationState, "sessionIds" | "currentSessionId" | "turnsBySessionId" | "selectedTurnIdBySessionId"> = { sessionIds: [], currentSessionId: null, turnsBySessionId: {}, selectedTurnIdBySessionId: {} };
+/** 空会话时复用稳定引用，避免 React 外部状态快照重复触发更新。 */
+export const EMPTY_CHAT_TURNS: ChatTurn[] = [];
 const updateTurn = (turns: ChatTurn[], turnId: string, update: Partial<ChatTurn>) => turns.map((turn) => turn.id === turnId ? { ...turn, ...update } : turn);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
