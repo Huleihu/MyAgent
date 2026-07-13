@@ -4,6 +4,7 @@
 """
 
 import unittest
+import json
 
 from my_agent.rag.retrieval.citation import CitationBuilder
 from my_agent.rag.models import Chunk
@@ -12,6 +13,7 @@ from my_agent.rag.indexing.index import InMemoryChunkIndex
 from my_agent.rag.retrieval.reranker import SimpleReranker
 from my_agent.rag.retrieval.retrieval_tool import RetrievalTool
 from my_agent.rag.retrieval.retriever import HybridRetriever
+from my_agent.rag.retrieval.trace import RetrievalTrace
 from my_agent.tools.executor import ToolExecutor
 from my_agent.tools.registry import ToolRegistry
 from my_agent.tools.schema import ToolCallRequest
@@ -96,6 +98,48 @@ class RetrievalToolTest(unittest.TestCase):
             result["citations"][0]["source"],
             "local://agentic-rag.md",
         )
+
+    def test_run_returns_three_stage_serializable_retrieval_trace(self):
+        tool = build_tool()
+
+        result = tool.run({"query": "RAG 检索工具", "top_k": 1})
+
+        trace_data = result["retrieval_trace"]
+        trace = RetrievalTrace.from_dict(trace_data)
+
+        self.assertEqual(trace.query, "RAG 检索工具")
+        self.assertEqual(trace.requested_top_k, 1)
+        self.assertEqual(trace.retrieved_count, 1)
+        self.assertEqual(trace.reranked_count, 1)
+        self.assertEqual(trace.citation_count, 1)
+        self.assertEqual(trace.final_count, 1)
+        self.assertEqual(trace.retrieved_chunks[0].chunk_id, "doc-1:0")
+        self.assertEqual(trace.reranked_chunks[0].rank, 1)
+        self.assertEqual(trace.citations[0].chunk_id, "doc-1:0")
+        self.assertGreaterEqual(trace.retrieve_duration_ms, 0.0)
+        self.assertGreaterEqual(trace.rerank_duration_ms, 0.0)
+        self.assertGreaterEqual(trace.citation_duration_ms, 0.0)
+        self.assertGreaterEqual(trace.total_duration_ms, 0.0)
+        self.assertEqual(json.loads(json.dumps(trace_data)), trace_data)
+        self.assertNotIn("content", trace_data["retrieved_chunks"][0])
+        self.assertNotIn("content", trace_data["reranked_chunks"][0])
+        self.assertNotIn("snippet", trace_data["citations"][0])
+        self.assertNotIn("metadata", trace_data["citations"][0])
+
+    def test_no_match_returns_empty_three_stage_retrieval_trace(self):
+        tool = build_tool()
+
+        result = tool.run({"query": "zzzxqv_unique_no_match_98765", "top_k": 3})
+
+        trace = RetrievalTrace.from_dict(result["retrieval_trace"])
+
+        self.assertEqual(trace.retrieved_chunks, [])
+        self.assertEqual(trace.reranked_chunks, [])
+        self.assertEqual(trace.citations, [])
+        self.assertEqual(trace.retrieved_count, 0)
+        self.assertEqual(trace.reranked_count, 0)
+        self.assertEqual(trace.citation_count, 0)
+        self.assertEqual(trace.final_count, 0)
 
     def test_run_uses_default_top_k(self):
         tool = build_tool()

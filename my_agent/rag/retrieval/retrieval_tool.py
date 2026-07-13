@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from my_agent.core.interfaces import Tool
@@ -12,6 +13,11 @@ from my_agent.rag.retrieval.citation import CitationBuilder
 from my_agent.rag.models import Citation, RetrievedChunk
 from my_agent.rag.retrieval.reranker import SimpleReranker
 from my_agent.rag.retrieval.retriever import HybridRetriever
+from my_agent.rag.retrieval.trace import (
+    CitationTrace,
+    RetrievalChunkTrace,
+    RetrievalTrace,
+)
 from my_agent.tools.schema import ToolDefinition
 
 
@@ -66,9 +72,25 @@ class RetrievalTool(Tool):
         query = self._get_query(arguments)
         top_k = self._get_top_k(arguments)
 
-        retrieved_chunks = self._retriever.retrieve(query=query, top_k=top_k)
-        reranked_chunks = self._reranker.rerank(query, retrieved_chunks)
-        citations = self._citation_builder.build(reranked_chunks)
+        total_started_at = perf_counter()
+        retrieved_chunks, retrieve_duration_ms = self._retrieve(query, top_k)
+        reranked_chunks, rerank_duration_ms = self._rerank(query, retrieved_chunks)
+        citations, citation_duration_ms = self._build_citations(reranked_chunks)
+        retrieval_trace = RetrievalTrace(
+            query=query,
+            requested_top_k=top_k,
+            retrieved_chunks=self._build_chunk_traces(retrieved_chunks),
+            reranked_chunks=self._build_chunk_traces(reranked_chunks),
+            citations=self._build_citation_traces(citations),
+            retrieved_count=len(retrieved_chunks),
+            reranked_count=len(reranked_chunks),
+            citation_count=len(citations),
+            final_count=len(reranked_chunks),
+            retrieve_duration_ms=retrieve_duration_ms,
+            rerank_duration_ms=rerank_duration_ms,
+            citation_duration_ms=citation_duration_ms,
+            total_duration_ms=(perf_counter() - total_started_at) * 1000,
+        )
 
         return {
             "query": query,
@@ -80,7 +102,79 @@ class RetrievalTool(Tool):
                 self._format_citation(citation)
                 for citation in citations
             ],
+            "retrieval_trace": retrieval_trace.to_dict(),
         }
+
+    def _retrieve(
+        self,
+        query: str,
+        top_k: int,
+    ) -> tuple[list[RetrievedChunk], float]:
+        """执行混合召回，并在异常中标注失败所属阶段。"""
+        started_at = perf_counter()
+        try:
+            chunks = self._retriever.retrieve(query=query, top_k=top_k)
+        except Exception as error:
+            raise RuntimeError("retrieval.search retrieve stage failed") from error
+        return chunks, (perf_counter() - started_at) * 1000
+
+    def _rerank(
+        self,
+        query: str,
+        retrieved_chunks: list[RetrievedChunk],
+    ) -> tuple[list[RetrievedChunk], float]:
+        """执行稳定重排，并在异常中标注失败所属阶段。"""
+        started_at = perf_counter()
+        try:
+            chunks = self._reranker.rerank(query, retrieved_chunks)
+        except Exception as error:
+            raise RuntimeError("retrieval.search rerank stage failed") from error
+        return chunks, (perf_counter() - started_at) * 1000
+
+    def _build_citations(
+        self,
+        reranked_chunks: list[RetrievedChunk],
+    ) -> tuple[list[Citation], float]:
+        """构造最终引用，并在异常中标注失败所属阶段。"""
+        started_at = perf_counter()
+        try:
+            citations = self._citation_builder.build(reranked_chunks)
+        except Exception as error:
+            raise RuntimeError("retrieval.search citation stage failed") from error
+        return citations, (perf_counter() - started_at) * 1000
+
+    def _build_chunk_traces(
+        self,
+        chunks: list[RetrievedChunk],
+    ) -> list[RetrievalChunkTrace]:
+        """按阶段输出顺序生成仅包含标识、排名和分数的摘要。"""
+        return [
+            RetrievalChunkTrace(
+                chunk_id=retrieved_chunk.chunk.chunk_id,
+                doc_id=retrieved_chunk.chunk.doc_id,
+                rank=rank,
+                keyword_score=retrieved_chunk.keyword_score,
+                vector_score=retrieved_chunk.vector_score,
+                final_score=retrieved_chunk.final_score,
+                rerank_score=retrieved_chunk.rerank_score,
+            )
+            for rank, retrieved_chunk in enumerate(chunks, start=1)
+        ]
+
+    def _build_citation_traces(
+        self,
+        citations: list[Citation],
+    ) -> list[CitationTrace]:
+        """按 Citation 输出顺序生成轻量引用摘要。"""
+        return [
+            CitationTrace(
+                chunk_id=citation.chunk_id,
+                doc_id=citation.doc_id,
+                rank=rank,
+                score=citation.score,
+            )
+            for rank, citation in enumerate(citations, start=1)
+        ]
 
     def _get_query(self, arguments: dict[str, Any]) -> str:
         """读取并校验 query 参数。"""

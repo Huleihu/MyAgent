@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from time import perf_counter
 from typing import Any
 
 from my_agent.rag.retrieval.retrieval_tool import RetrievalTool
@@ -80,21 +79,14 @@ class RetrievalEvaluator:
         if not isinstance(test_case, RetrievalTestCase):
             raise ValueError("test_case must be a RetrievalTestCase")
 
-        started_at = perf_counter()
         tool_result = self._retrieval_tool.run(
             {
                 "query": test_case.query,
                 "top_k": test_case.top_k,
             }
         )
-        duration_ms = (perf_counter() - started_at) * 1000
         top_chunks = tool_result["chunks"]
-        trace = RagTrace(
-            query=test_case.query,
-            retrieved_chunks=top_chunks,
-            citations=tool_result["citations"],
-            duration_ms=duration_ms,
-        )
+        trace = self._read_retrieval_trace(tool_result)
 
         matched_doc_ids = self._find_matched_doc_ids(
             expected_doc_ids=test_case.expected_doc_ids,
@@ -124,6 +116,13 @@ class RetrievalEvaluator:
             trace=trace,
             failure_reasons=failure_reasons,
         )
+
+    def _read_retrieval_trace(self, tool_result: dict[str, Any]) -> RagTrace:
+        """恢复 RetrievalTool 生成的同一份运行期 Trace，不另行计时。"""
+        trace_data = tool_result.get("retrieval_trace")
+        if not isinstance(trace_data, dict):
+            raise ValueError("retrieval_trace must be a dict")
+        return RagTrace.from_dict(trace_data)
 
     def _find_matched_doc_ids(
         self,

@@ -18,6 +18,7 @@ from my_agent.rag.retrieval.reranker import SimpleReranker
 from my_agent.rag.retrieval.retrieval_tool import RetrievalTool
 from my_agent.rag.retrieval.retriever import HybridRetriever
 from my_agent.rag.evaluation.trace import RagTrace
+from my_agent.rag.retrieval.trace import RetrievalTrace
 
 
 def build_tool():
@@ -54,32 +55,8 @@ def build_tool():
 
 
 class RagTraceTest(unittest.TestCase):
-    def test_trace_keeps_query_chunks_citations_and_duration(self):
-        trace = RagTrace(
-            query="RAG 检索工具",
-            retrieved_chunks=[
-                {
-                    "chunk_id": "doc-1:0",
-                    "keyword_score": 0.5,
-                    "vector_score": 0.7,
-                    "final_score": 0.62,
-                    "rerank_score": 0.62,
-                }
-            ],
-            citations=[
-                {
-                    "doc_id": "doc-1",
-                    "chunk_id": "doc-1:0",
-                    "source": "local://agentic-rag.md",
-                }
-            ],
-            duration_ms=1.5,
-        )
-
-        self.assertEqual(trace.query, "RAG 检索工具")
-        self.assertEqual(trace.retrieved_chunks[0]["chunk_id"], "doc-1:0")
-        self.assertEqual(trace.citations[0]["doc_id"], "doc-1")
-        self.assertEqual(trace.duration_ms, 1.5)
+    def test_rag_trace_is_compatible_retrieval_trace_export(self):
+        self.assertIs(RagTrace, RetrievalTrace)
 
 
 class RetrievalEvaluatorTest(unittest.TestCase):
@@ -101,8 +78,32 @@ class RetrievalEvaluatorTest(unittest.TestCase):
         self.assertEqual(result.top_chunks[0]["chunk_id"], "doc-1:0")
         self.assertIsInstance(result.trace, RagTrace)
         self.assertEqual(result.trace.query, "RAG 检索工具")
-        self.assertGreaterEqual(result.trace.duration_ms, 0.0)
+        self.assertEqual(result.trace.requested_top_k, 1)
+        self.assertGreaterEqual(result.trace.total_duration_ms, 0.0)
         self.assertEqual(result.failure_reasons, [])
+
+    def test_evaluate_restores_trace_returned_by_retrieval_tool(self):
+        tool = build_tool()
+        evaluator = RetrievalEvaluator(tool)
+        test_case = RetrievalTestCase(
+            query="RAG 检索工具",
+            expected_doc_ids=["doc-1"],
+            expected_chunk_keywords=["检索能力"],
+            top_k=1,
+        )
+
+        result = evaluator.evaluate(test_case)
+        tool_trace = RetrievalTrace.from_dict(
+            tool.run({"query": test_case.query, "top_k": test_case.top_k})[
+                "retrieval_trace"
+            ]
+        )
+
+        self.assertEqual(result.trace.query, tool_trace.query)
+        self.assertEqual(result.trace.requested_top_k, tool_trace.requested_top_k)
+        self.assertEqual(result.trace.retrieved_chunks, tool_trace.retrieved_chunks)
+        self.assertEqual(result.trace.reranked_chunks, tool_trace.reranked_chunks)
+        self.assertEqual(result.trace.citations, tool_trace.citations)
 
     def test_evaluate_reports_missing_doc_and_failure_reason(self):
         evaluator = RetrievalEvaluator(build_tool())

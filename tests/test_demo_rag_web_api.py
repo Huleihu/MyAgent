@@ -45,6 +45,12 @@ class DemoRagWebApiTest(unittest.TestCase):
         self.assertEqual(trace["tool_name"], "retrieval.search")
         self.assertEqual(trace["arguments"], {"query": user_input, "top_k": 3})
         self.assertTrue(trace["success"])
+        self.assertEqual(trace["result"]["retrieval_trace"]["query"], user_input)
+        self.assertEqual(trace["result"]["retrieval_trace"]["retrieved_count"], 3)
+        self.assertNotIn(
+            "content",
+            trace["result"]["retrieval_trace"]["retrieved_chunks"][0],
+        )
         self.assertTrue(response["citations"])
         self.assertEqual(response["citations"], trace["result"]["citations"])
         self.assertNotIn("演示回答（", response["output_text"])
@@ -62,6 +68,11 @@ class DemoRagWebApiTest(unittest.TestCase):
         )
         self.assertEqual(len(response["tool_traces"]), 1)
         self.assertTrue(response["tool_traces"][0]["success"])
+        retrieval_trace = response["tool_traces"][0]["result"]["retrieval_trace"]
+        self.assertEqual(retrieval_trace["query"], "zzzxqv_unique_no_match_98765")
+        self.assertEqual(retrieval_trace["retrieved_chunks"], [])
+        self.assertEqual(retrieval_trace["reranked_chunks"], [])
+        self.assertEqual(retrieval_trace["citations"], [])
 
     def test_second_turn_uses_only_its_own_tool_trace_and_citations(self):
         session_id = self.create_session()
@@ -79,6 +90,18 @@ class DemoRagWebApiTest(unittest.TestCase):
         self.assertEqual(
             second_response["tool_traces"][0]["arguments"]["query"],
             "Runtime 与 Agent Loop 如何协作？",
+        )
+        self.assertEqual(
+            first_response["tool_traces"][0]["result"]["retrieval_trace"]["query"],
+            "Agentic RAG 如何把检索作为工具调用？",
+        )
+        self.assertEqual(
+            second_response["tool_traces"][0]["result"]["retrieval_trace"]["query"],
+            "Runtime 与 Agent Loop 如何协作？",
+        )
+        self.assertNotEqual(
+            first_response["tool_traces"][0]["result"]["retrieval_trace"]["reranked_chunks"],
+            second_response["tool_traces"][0]["result"]["retrieval_trace"]["reranked_chunks"],
         )
         self.assertNotEqual(first_response["citations"], second_response["citations"])
         self.assertEqual(

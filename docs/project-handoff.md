@@ -1685,22 +1685,33 @@ Web 层只从 `ConversationTurnResult.tool_traces`（当前回合快照）提取
 确认用户身份和可访问的知识库范围，再把受信任的检索上下文注入服务端。当前未实现用户系统、
 租户隔离、文件上传、异步索引任务、数据库或外部向量库。
 
-### 10.2 推荐下一步：RAG 多阶段 Trace
+### 10.2 已完成：在线检索三阶段 Trace MVP
 
-当前 Web 响应已能展示节点 Trace、工具调用 Trace 和最终 Citation，但 RAG 内部仍只提供聚合的
-检索结果，无法区分文档何时被解析、切分、向量化，以及查询时如何经历 retrieve、rerank 和
-citation。下一阶段建议新增 RAG 专用的阶段记录模型，保持它与全局 Runtime Trace 分离：
+`retrieval.search` 已在 `my_agent.rag.retrieval.trace` 中定义专属运行期模型
+`RetrievalChunkTrace`、`CitationTrace` 和 `RetrievalTrace`，并在工具内部记录单次查询的：
 
 ```text
-入库：parse → chunk → embed → index
-查询：retrieve → rerank → citation
+查询：HybridRetriever(retrieve) → SimpleReranker(rerank) → CitationBuilder(citation)
 ```
 
-阶段 Trace 应保存输入数量、输出数量、耗时、失败原因和必要的稳定标识；`RetrievalEvaluator`
-可继续以最终召回结果评估，同时引用这些阶段记录解释失败发生在哪一层。Demo 缓存初始化可记录
-入库阶段，`retrieval.search` 可记录查询阶段；不把第三方 SDK、数据库类型或 RAG 专用字段扩散
-到 `ConversationRuntime`、Runtime 节点 Trace 或 Web 路由。
+本 MVP 只追踪这三个在线查询阶段；`HybridRetriever` 内部的关键词、向量和融合仍是同一 retrieve
+阶段，未拆分为独立 Trace。文档入库的 parse、chunk、embed、index 也不属于本次范围。Trace 只保存
+`chunk_id`、`doc_id`、rank、阶段相关分数、数量和毫秒耗时，不保存 Chunk 正文、Citation snippet、完整
+metadata 或 embedding。它使用 `retrieve_duration_ms`、`rerank_duration_ms`、
+`citation_duration_ms` 和独立测量的 `total_duration_ms`；并记录 `retrieved_count`、
+`reranked_count`、`citation_count` 与 `final_count`。
 
-该阶段完成后，再接入真实 `ModelClient` 适配器最合适：届时可同时展示模型决策、工具调用、RAG
-阶段 Trace 和最终 Citation；真实 Embedding、Rerank、向量库与持久化 SessionStore 仍应分别通过
-适配器逐步接入。
+`RetrievalTool` 将 `RetrievalTrace.to_dict()` 放入成功结果的 `retrieval_trace` 字段，原有
+`query`、`chunks`、`citations` 契约保持不变。`ToolTraceRecord.result` 会自然保存该字段，故 Web
+调试响应可从本轮 `tool_traces[].result.retrieval_trace` 查看检索过程；顶层 `citations` 仍只由本轮
+Tool Trace 的 `result.citations` 投影，不新增顶层检索遥测 API。`RetrievalEvaluator` 通过
+`RetrievalTrace.from_dict()` 恢复工具生成的同一份 Trace，不再自行计时。评估层保留
+`my_agent.rag.evaluation.trace.RagTrace` 作为兼容导出，因此既有导入路径和 `isinstance` 契约不变。
+
+目前成功与无命中链路均有完整三阶段 Trace。阶段异常尚不生成部分 Trace；`RetrievalTool` 会在外层
+异常消息中标注 retrieve、rerank 或 citation 阶段，供 `ToolTraceRecord.error` 定位。这是为了保持 MVP
+最小范围的暂时限制。另一个暂时折中是 `retrieval_trace` 会随工具结果进入 ReAct observation；接入真实
+LLM 前应把业务结果与遥测数据分离，避免将调试数据注入模型上下文。
+
+推荐下一步是在保持该边界的前提下，增加阶段异常的结构化 Trace，并分别通过适配器接入真实
+Embedding、Rerank、向量库与持久化 SessionStore；入库阶段 Trace 应作为独立工作推进。
