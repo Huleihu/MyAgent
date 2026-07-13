@@ -34,3 +34,8 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Next.js 前端构建与依赖
+node_modules/
+frontend/.next/
+frontend/coverage/
