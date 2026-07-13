@@ -1350,7 +1350,7 @@ OK
 
 当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验和最小连续多轮对话触发。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先补齐更便于演示的 Runtime Eval 数据结构或结构感知 Chunker。
+结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验、最小连续多轮对话触发和 Runtime Eval MVP。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先考虑结构感知 Chunker 或把 `ConversationRuntime` 接入演示入口。
 
 ### 7.1 已完成：Runtime 节点级 Trace
 
@@ -1426,7 +1426,42 @@ docs/project-handoff.md
 - 连续多轮可复用消息历史，且第一版只支持同一实例串行调用，不保证线程安全；
 - 不做持久化恢复、Memory、多用户会话、并发、Human-in-the-loop 或 Checkpoint 恢复。
 
-### 7.4 后续候选方向
+### 7.4 已完成：Runtime Eval MVP
+
+已新增文件：
+
+```text
+my_agent/runtime/eval_models.py
+my_agent/runtime/evaluator.py
+tests/test_runtime_eval.py
+```
+
+完成内容：
+
+- `RuntimeEvalCase` 定义单轮固定用例的用户输入、严格最终文本、节点路径和工具调用期望；
+- `RuntimeEvaluator.evaluate(case)` 通过工厂创建独立 `ConversationRuntime`，执行单个用例；
+- `RuntimeEvaluator.evaluate_many(cases)` 保持输入顺序，且单个用例创建或执行失败不会中断后续用例；
+- Runtime 正常完成后，分别检查最终输出、节点路径和工具调用序列，并收集全部不匹配项；
+- 工具调用第一版只严格检查顺序、工具名和成功状态，不检查参数或完整返回结果；
+- Runtime 创建或执行抛出普通 `Exception` 时，返回 `runtime_execution` 失败项，包含异常类型和消息；
+- 期望路径、期望工具调用、失败项、实际路径和实际工具调用均保存为 tuple 快照；
+- `ConversationTurnResult` 仅作为可选调试引用保留，其中包含可变 `RuntimeContext`，因此 `RuntimeEvalResult` 不承诺深度不可变。
+
+评估定位与边界：
+
+- Runtime Eval MVP 只用于基于 Fake Planner、Fake ModelClient 和确定性工具的执行回归评估；
+- `output_text` 使用严格字符串相等，目的是验证确定性链路，不用于判断真实 LLM 的语义等价性；
+- 不增加 Matcher DSL、关键词匹配、LLM-as-a-judge、真实 LLM 评估、多轮 Eval、报告落盘、CLI 或指标聚合；
+- 不修改 `RuntimeExecutor`、`ConversationRuntime`、`ReActAgentLoop`、Tool、RAG 或现有 Trace 数据模型。
+
+已验证：
+
+- 通过用例会同时确认严格输出、节点路径和工具调用序列；
+- 三项断言不匹配时会一次返回全部失败项；
+- Runtime 异常会转换为明确的 `runtime_execution` 失败项；
+- 多用例评估保持输入顺序，每个用例恰好调用一次工厂，并且 SessionState、Planner 状态和工具 Trace 不泄漏。
+
+### 7.5 后续候选方向
 
 - RAG 增强：结构感知 Chunker、真实 Embedding 适配器、真实 Rerank 适配器、RAG 多阶段 Trace；
 - Plan-and-Execute：任务拆解模型、步骤状态、失败重试、反思修正；
