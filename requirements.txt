@@ -1,5 +1,8 @@
 # 运行时尽量不依赖第三方库；typing_extensions 用于兼容老版本 Python 的类型能力。
 typing_extensions>=4.7,<5
 
+# Markdown AST 依赖。仅由 MarkdownItBlockParser 使用，避免第三方 Token 扩散到 RAG 核心。
+markdown-it-py>=3.0,<4
+
 # 测试依赖。当前测试使用 unittest，保留 pytest 便于后续更清晰地组织测试。
 pytest>=7.4,<9

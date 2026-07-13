@@ -57,14 +57,14 @@
 
 当前完成：
 
-- 已实现 Markdown Parser、`TextChunker`、`SimpleEmbeddingModel`、`InMemoryChunkIndex`；
+- 已实现 Markdown Parser、`TextChunker`、`MarkdownStructureChunker`、`SimpleEmbeddingModel`、`InMemoryChunkIndex`；
 - 已实现关键词召回、向量召回、`HybridRetriever`、`SimpleReranker`、`CitationBuilder`；
 - 已封装 `retrieval.search` 为标准 Tool；
 - 已有 `RagTrace`、`RetrievalEvaluator` 和失败原因解释。
 
 主要缺口：
 
-- Chunker 仍是固定字符切分，不理解 Markdown 标题、段落、列表或代码块；
+- Markdown 结构切分已覆盖标题、段落、列表和代码块；表格、复杂 HTML、MDX 等扩展语法仍按原文 `OTHER` 块处理；
 - Embedding 仍是确定性词袋模型，不是真实 embedding 适配器；
 - Reranker 当前是接口占位式简单重排，还没有真实 rerank 服务适配；
 - Index 仍是内存实现，还没有外部向量库适配；
@@ -72,7 +72,7 @@
 
 建议下一步：
 
-- 在 Runtime Trace 后，再增强 RAG Trace 或结构感知 Chunker；
+- 在 Runtime Trace 后，再增强 RAG 多阶段 Trace 或真实 Embedding 适配器；
 - 暂不急着接真实向量库，先保持测试稳定和链路可讲清楚。
 
 #### 目标三：Agent Loop、Tool Calling 与 Plan-and-Execute
@@ -123,6 +123,7 @@
 - 已有 `Checkpoint` 和 `CheckpointRecorder` 保存内存快照；
 - Agent Loop 已可选接入 checkpoint；
 - RAG Eval 已有检索测试与失败原因解释。
+- 已有确定性 Runtime Eval MVP，可校验最终输出、节点路径和工具调用序列。
 
 主要缺口：
 
@@ -131,12 +132,12 @@
 - Memory 尚未实现；
 - Checkpoint 仍是内存快照，不支持持久化和恢复；
 - Human-in-the-loop 暂停、审批、恢复尚未实现；
-- Agent Eval 目前主要覆盖 RAG 检索，还没有统一 Runtime/Agent 评估数据。
+- 已具备确定性 Runtime Eval MVP；尚未覆盖真实 LLM、语义等价判断、指标聚合和评估报告。
 
 建议下一步：
 
-- 第一优先级是基于节点 Trace 的 Runtime Eval 数据结构；
-- 第二优先级是把现有 `ConversationRuntime` 接入 CLI、Web API 或 Canvas 演示入口；
+- 第一优先级是把现有 `ConversationRuntime` 接入 CLI、Web API 或 Canvas 演示入口；
+- 第二优先级是增强 RAG 的结构感知 Chunker 或多阶段 Trace；
 - Memory、持久化恢复和 Human-in-the-loop 放到 Trace 基础稳定之后。
 
 当前已经完成：
@@ -235,6 +236,9 @@ my_agent/rag/
 
   indexing/
     chunker.py
+    markdown_blocks.py
+    markdown_it_block_parser.py
+    markdown_chunker.py
     embedding.py
     index.py
     负责 Document -> Chunk -> embedding -> in-memory index
@@ -547,9 +551,50 @@ chunks:
 
 - Chunker 只接收标准 `Document`；
 - Chunker 不读取文件；
-- Chunker 不解析 Markdown / PDF / Word；
+- `TextChunker` 不解析 Markdown / PDF / Word；`MarkdownStructureChunker` 只通过可注入的块解析协议理解已标准化的 Markdown 内容，不负责原始文件格式识别；
 - Chunker 不做 Embedding；
 - Chunker 不写索引。
+
+### 2.9.1 MarkdownStructureChunker 结构感知切分
+
+文件：
+
+```text
+my_agent/rag/indexing/markdown_blocks.py
+my_agent/rag/indexing/markdown_it_block_parser.py
+my_agent/rag/indexing/markdown_chunker.py
+tests/test_markdown_it_block_parser.py
+tests/test_markdown_structure_chunker.py
+```
+
+实现链路：
+
+```text
+markdown-it-py
+        |
+        v
+MarkdownItBlockParser
+        |
+        v
+MarkdownBlock
+        |
+        v
+MarkdownStructureChunker
+        |
+        v
+Chunk
+```
+
+设计与边界：
+
+- 使用 `markdown-it-py` 识别 CommonMark 块级语法；它只在 `MarkdownItBlockParser` 中出现，第三方 Token 不会扩散到 RAG 核心；
+- `MarkdownBlock`、`Heading` 与 `MarkdownBlockParser` 是轻量内部模型和协议，适配器负责把 Token 与原文行范围转换为项目模型；
+- `MarkdownStructureChunker` 只依赖 `MarkdownBlockParser` 协议，负责按标题路径组合和回退切分，不理解第三方 Token，也不负责 Embedding、索引或检索；
+- 第一版支持标题路径、段落、完整列表、fenced / 缩进代码块；未专门支持的块保留原文并标记为 `OTHER`，不承诺表格、复杂 HTML 或 MDX 的语义切分；
+- Parser 的 `start_offset` / `end_offset` 使用原始 `Document.content` 的左闭右开字符区间，块内容满足 `content[start_offset:end_offset] == block.content`；最终 Chunk 的 offset 仅描述正文来源，因为其内容可能额外带有标题前缀；
+- `chunk_size` 限制最终 `Chunk.content`，包含标题前缀和分隔换行。常规块保持完整；仅超长块使用 overlap 回退。超长列表第一版按字符回退，超长 fenced code 尽量按行切分并为每块补全围栏；
+- 当标题上下文过长时，只保留最靠近正文的标题并截断标题文本，至少留出一个正文字符，避免负容量、空 Chunk 和死循环；
+- 原 `TextChunker` 保持不变，可继续用于纯文本或固定字符切分场景。
 
 ### 2.10 Chunk 向量化与内存向量索引
 
@@ -1180,7 +1225,7 @@ MarkdownDocumentParser
 list[Document]
         |
         v
-TextChunker
+TextChunker / MarkdownStructureChunker
         |
         v
 list[Chunk]
@@ -1309,14 +1354,14 @@ OK
 
 ### 6.1 Chunker 增强
 
-当前 `TextChunker` 使用固定字符长度切分，优点是确定、简单、容易测试；不足是不了解标题、段落、列表和代码块等文档结构。
+`TextChunker` 继续提供固定字符切分，优点是确定、简单、容易测试。`MarkdownStructureChunker` 已补充标题、段落、列表和代码块感知切分，两者通过相同的 `Document -> Chunk` 调用契约并存。
 
 后续增强建议：
 
 - 保持 `split(document) -> list[Chunk]` 和 `split_many(documents) -> list[Chunk]` 这两个调用契约；
-- 新增 `MarkdownStructureChunker` 或 `ParagraphChunker`，优先按标题、段落和列表边界切分；
-- 过长段落再回退到固定长度切分和 overlap；
-- Chunk metadata 中继续保留 `source`、`title`、`chunk_index`，后续可补充 `section`、`heading_path`、`start_offset`、`end_offset`；
+- 继续保持两种 Chunker 的职责独立，不让结构切分影响纯文本固定切分；
+- 后续若需要表格、MDX 或 HTML 的语义边界，再为 `MarkdownItBlockParser` 小步增加块类型支持；
+- `MarkdownStructureChunker` 的 Chunk metadata 已保留 `source`、`title`、`chunk_index`，并补充 `heading_path`、`start_offset`、`end_offset`；
 - 不让 Chunker 直接调用 Embedding、Index 或 ToolExecutor。
 
 ### 6.2 Embedding 与 Index 增强
@@ -1341,7 +1386,7 @@ OK
 ```text
 1. RetrievalTool
 2. RAG Trace 与 Retrieval Test
-3. 结构感知 Chunker
+3. MarkdownStructureChunker
 4. EmbeddingModel / ChunkIndex 轻量协议
 5. 真实 Embedding 适配器或外部向量库适配器
 ```
@@ -1350,7 +1395,7 @@ OK
 
 当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验、最小连续多轮对话触发和 Runtime Eval MVP。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先考虑结构感知 Chunker 或把 `ConversationRuntime` 接入演示入口。
+结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验、最小连续多轮对话触发和 Runtime Eval MVP；RAG 已具备 Markdown 结构感知 Chunker。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先把 `ConversationRuntime` 接入演示入口，或补充真实 Embedding 适配器与 RAG 多阶段 Trace。
 
 ### 7.1 已完成：Runtime 节点级 Trace
 
@@ -1461,9 +1506,23 @@ tests/test_runtime_eval.py
 - Runtime 异常会转换为明确的 `runtime_execution` 失败项；
 - 多用例评估保持输入顺序，每个用例恰好调用一次工厂，并且 SessionState、Planner 状态和工具 Trace 不泄漏。
 
-### 7.5 后续候选方向
+### 7.5 已完成：MarkdownStructureChunker MVP
 
-- RAG 增强：结构感知 Chunker、真实 Embedding 适配器、真实 Rerank 适配器、RAG 多阶段 Trace；
+已按 `markdown-it-py -> MarkdownItBlockParser -> MarkdownBlock -> MarkdownStructureChunker -> Chunk`
+实现结构感知切分。适配器将第三方 Token 收敛为项目内部 `MarkdownBlock`，Chunker 只依赖
+`MarkdownBlockParser` 协议，因此测试可注入 Fake Parser，未来替换解析实现也不影响 RAG 核心。
+
+已支持标题路径、段落、完整列表、fenced / 缩进代码块和原文保留的 `OTHER` 块；正常块不跨章节且优先完整保留。
+最终 `Chunk.content` 带 Markdown 标题上下文，`chunk_size` 包含该上下文；metadata 提供可序列化的
+`heading_path`、`start_offset`、`end_offset` 和连续 `chunk_index`。超长段落与 `OTHER` 块按字符回退，
+超长列表当前也按字符回退，超长 fenced code 尽量按行切分并补全围栏。
+
+已知限制：第一版不提供表格、复杂 HTML、MDX 的语义切分；超长列表不保证按列表项边界切开；Chunk 的 offset
+只描述源正文范围，不包含合成的标题前缀。
+
+### 7.6 后续候选方向
+
+- RAG 增强：真实 Embedding 适配器、真实 Rerank 适配器、RAG 多阶段 Trace；
 - Plan-and-Execute：任务拆解模型、步骤状态、失败重试、反思修正；
 - State 增强：Checkpoint 持久化、从 checkpoint 恢复；
 - Memory：先做简单内存记忆接口，再考虑检索式 Memory；
@@ -1481,7 +1540,7 @@ tests/test_runtime_eval.py
 
 RAG 后续增强建议：
 
-- Chunker 从固定字符切分升级为 Markdown 结构感知切分；
+- 继续使用 `TextChunker` 或 `MarkdownStructureChunker`，按文档类型选择固定字符或结构感知切分；
 - Embedding 从确定性词袋升级为可替换模型适配器；
 - Index 从内存实现升级为可替换向量库适配器；
 - RAG Trace 细化为 parse、chunk、embed、retrieve、rerank、citation 多阶段记录；
