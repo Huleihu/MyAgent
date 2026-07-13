@@ -32,6 +32,7 @@
 - 已通过 `RuntimeContext.node_outputs` 保存组件输出；
 - 已通过 `RuntimeContext.node_traces` 保存节点级执行 Trace；
 - `agent_loop` 节点通过依赖注入调用已有 `ReActAgentLoop`。
+- 已有基于 FastAPI 的最小 Web API，可通过 `ConversationRuntime` 创建内存会话、发送多轮消息并获取本轮 Trace。
 
 主要缺口：
 
@@ -42,7 +43,7 @@
 
 建议下一步：
 
-- 后续可考虑把 `ConversationRuntime` 作为 CLI、Web API 或 Canvas 的统一触发入口；
+- `ConversationRuntime` 已作为 Web API 的统一触发入口；下一步优先在演示装配层连通确定性的 Agentic RAG Tool 调用，而不是扩展 DSL 节点类型；
 - 暂不为单进程最小多轮引入 Memory、持久化恢复或并发会话管理。
 
 #### 目标二：Agentic RAG Tool
@@ -136,8 +137,8 @@
 
 建议下一步：
 
-- 第一优先级是把现有 `ConversationRuntime` 接入 CLI、Web API 或 Canvas 演示入口；
-- 第二优先级是增强 RAG 的结构感知 Chunker 或多阶段 Trace；
+- 第一优先级已完成：`ConversationRuntime` 已接入 Web API 演示入口；
+- 下一优先级是在 Web 演示装配层接入确定性的 `retrieval.search` Tool，展示 Agent Loop、Tool Trace 与引用结果的端到端闭环；
 - Memory、持久化恢复和 Human-in-the-loop 放到 Trace 基础稳定之后。
 
 当前已经完成：
@@ -1395,7 +1396,7 @@ OK
 
 当前第四阶段的多轮 ReAct Agent Loop、Checkpoint 接入和 LLMPlanner MVP 已完成。第五阶段 JSON DSL Runtime v0.1 已完成，当前只支持 `begin -> agent_loop -> message` 线性流程，并已具备节点级 Runtime Trace。
 
-结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验、最小连续多轮对话触发和 Runtime Eval MVP；RAG 已具备 Markdown 结构感知 Chunker。下一步不要急着扩展 `tool_call`、switch、loop 或并发，可优先把 `ConversationRuntime` 接入演示入口，或补充真实 Embedding 适配器与 RAG 多阶段 Trace。
+结合当前简历目标，Runtime 已具备节点级 Trace、输入输出映射、变量引用校验、最小连续多轮对话触发、Runtime Eval MVP 与 Web API 演示入口；RAG 已具备 Markdown 结构感知 Chunker。下一步不要急着扩展 `tool_call`、switch、loop 或并发，优先把现有 `retrieval.search` 接入确定性 Web 演示装配层，形成可直接展示的 Agentic RAG 闭环。
 
 ### 7.1 已完成：Runtime 节点级 Trace
 
@@ -1601,3 +1602,58 @@ RAG Trace 与评估可这样讲：
 Agentic RAG 可这样讲：
 
 > RAG 链路参考 RAGFlow 的分层思路，但做了轻量化实现。底层拆成 Parser、Document、Chunker、Embedding、Index、Retriever、Reranker、Citation 和 Eval。Retrieval 被封装成 `retrieval.search` Tool，因此 Agent 主流程不需要关心知识库内部怎么检索，后续替换解析器、向量库或模型也不会影响 Agent Runtime。
+
+## 10. 最小 Web API 演示入口
+
+已新增基于 FastAPI 的最小 Web API，作为 `ConversationRuntime` 的 HTTP 适配入口：
+
+```bash
+conda run -n myagent-py311 uvicorn my_agent.web.app:app --reload
+```
+
+可用端点：
+
+```text
+GET  /health
+POST /sessions
+POST /sessions/{session_id}/messages
+```
+
+`POST /sessions` 返回 `{"session_id": "..."}`。消息接口接收
+`{"user_input": "..."}`，成功时固定返回 `session_id`、`output_text`、本轮
+`node_traces` 和本轮 `tool_traces`。Runtime 执行异常会写入服务端日志，并返回不含
+内部细节的 `500` 错误：
+
+```json
+{
+  "error": {
+    "code": "runtime_execution_failed",
+    "message": "Runtime execution failed"
+  }
+}
+```
+
+Web 层通过 `SessionStore` 抽象访问会话状态；第一版的 `InMemorySessionStore` 仅保存
+`SessionState` 与每个 session 的串行锁，不保存或序列化 `ConversationRuntime`。每次消息
+处理均以既有 `SessionState` 重新装配独立的确定性演示 Runtime，因此不同会话不会共享
+Planner、TraceRecorder、ToolExecutor 或 Agent Loop 等有状态对象。后续持久化实现应保存
+消息、状态和 Trace 数据，并在读取状态后经 `RuntimeFactory` 重建 Runtime。
+
+当前限制：会话仅在单进程内存中保存；同一 session 的消息用锁串行处理，但不提供跨进程
+共享、持久化恢复、鉴权、流式输出、真实模型或真实 RAG 知识库。
+
+### 10.1 推荐下一步：确定性 Agentic RAG Web 演示闭环
+
+下一阶段建议只扩展 Web 演示装配层，不改动 Runtime、Agent Loop、RAG 核心或 DSL：
+
+1. 在演示 Runtime 装配时，使用少量固定 Markdown 文档构建既有内存索引，并注册现有
+   `retrieval.search` Tool；
+2. 为每个 session 新建确定性 Planner：首轮返回 `ToolAction("retrieval.search")`，读取
+   observation 后返回带 Citation 的最终回答；
+3. 保持 `POST /sessions/{session_id}/messages` 响应契约不变，通过已有 `tool_traces` 直接展示
+   工具名称、参数、成功状态和本轮节点路径；
+4. 新增 API 回归用例，校验工具调用、引用字段、连续对话与跨 session 隔离。
+
+这一项能一次展示 Web API、ConversationRuntime、ReAct、Tool Calling、RAG 与 Trace 的真实
+连接关系，并继续使用确定性实现保证演示和测试可复现。真实 `ModelClient` 适配器、Embedding/
+Rerank 服务和持久化 SessionStore 应在此闭环稳定后再接入。

@@ -6,3 +6,8 @@ markdown-it-py>=3.0,<4
 
 # 测试依赖。当前测试使用 unittest，保留 pytest 便于后续更清晰地组织测试。
 pytest>=7.4,<9
+
+# 最小 Web API 演示入口与其 HTTP 测试客户端。
+fastapi>=0.110,<1
+uvicorn>=0.27,<1
+httpx>=0.27,<1
