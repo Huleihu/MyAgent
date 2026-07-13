@@ -17,6 +17,8 @@ from my_agent.runtime.context import RuntimeContext
 from my_agent.runtime.conversation import ConversationTurnResult
 from my_agent.runtime.trace import NodeExecutionRecord
 from my_agent.state.session import SessionState
+from my_agent.state.trace import ToolTraceRecord
+from my_agent.web.app import _extract_turn_citations
 
 
 class FakeConversationRuntime:
@@ -140,6 +142,8 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(second_response.status_code, 200)
         self.assertEqual(first_response.json()["output_text"], "第1轮：第一条")
         self.assertEqual(second_response.json()["output_text"], "第2轮：第二条")
+        self.assertEqual(first_response.json()["citations"], [])
+        self.assertEqual(second_response.json()["citations"], [])
         self.assertEqual(
             second_response.json()["node_traces"],
             [
@@ -196,6 +200,44 @@ class WebApiTest(unittest.TestCase):
                 }
             },
         )
+
+    def test_extract_turn_citations_deduplicates_retrieval_results_and_copies_items(self):
+        first_citation = {"doc_id": "doc-1", "chunk_id": "doc-1:0", "title": "第一篇"}
+        duplicate_citation = {"doc_id": "doc-1", "chunk_id": "doc-1:0", "title": "重复"}
+        second_citation = {"doc_id": "doc-2", "chunk_id": "doc-2:0", "title": "第二篇"}
+        traces = (
+            ToolTraceRecord(
+                trace_id="trace-1",
+                tool_name="retrieval.search",
+                call_id="call-1",
+                arguments={"query": "问题"},
+                success=True,
+                result={"citations": [first_citation, duplicate_citation]},
+                error=None,
+                duration_ms=1.0,
+            ),
+            ToolTraceRecord(
+                trace_id="trace-2",
+                tool_name="retrieval.search",
+                call_id="call-2",
+                arguments={"query": "问题"},
+                success=True,
+                result={"citations": [second_citation]},
+                error=None,
+                duration_ms=1.0,
+            ),
+        )
+
+        citations = _extract_turn_citations(traces)
+        citations[0]["title"] = "已修改副本"
+
+        self.assertEqual(len(citations), 2)
+        self.assertEqual(
+            citations[1:],
+            [second_citation],
+        )
+        self.assertEqual(first_citation["title"], "第一篇")
+        self.assertEqual(citations[0]["doc_id"], "doc-1")
 
 
 if __name__ == "__main__":

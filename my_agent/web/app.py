@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from collections.abc import Callable
 from dataclasses import asdict
@@ -92,9 +93,35 @@ def _serialize_turn_result(
     return {
         "session_id": session_id,
         "output_text": turn_result.output_text,
+        "citations": _extract_turn_citations(turn_result.tool_traces),
         "node_traces": [asdict(trace) for trace in turn_result.node_traces],
         "tool_traces": [asdict(trace) for trace in turn_result.tool_traces],
     }
+
+
+def _extract_turn_citations(tool_traces) -> list[dict]:
+    """从当前回合成功检索 Trace 提取、去重并复制 Citation。"""
+    citations = []
+    seen_citation_keys = set()
+    for trace in tool_traces:
+        if (
+            trace.tool_name != "retrieval.search"
+            or not trace.success
+            or not isinstance(trace.result, dict)
+        ):
+            continue
+        trace_citations = trace.result.get("citations")
+        if not isinstance(trace_citations, list):
+            continue
+        for citation in trace_citations:
+            if not isinstance(citation, dict):
+                continue
+            citation_key = (citation.get("doc_id"), citation.get("chunk_id"))
+            if citation_key in seen_citation_keys:
+                continue
+            seen_citation_keys.add(citation_key)
+            citations.append(deepcopy(citation))
+    return citations
 
 
 def _runtime_failure_response() -> dict:
