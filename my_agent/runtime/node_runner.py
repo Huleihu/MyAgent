@@ -43,6 +43,11 @@ class AgentLoopNodeRunner:
         answer = self._agent_loop.run(user_input)
         return {"output": answer}
 
+    def bind_run_state(self, run_state, checkpoint_recorder) -> None:
+        """为当前回合绑定恢复状态；不会替换已注入的 Planner 或工具执行器。"""
+        self._agent_loop._run_state = run_state
+        self._agent_loop._checkpoint_recorder = checkpoint_recorder
+
 
 class MessageNodeRunner:
     """执行 message 节点，把最终消息写入 Runtime 变量。"""

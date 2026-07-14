@@ -33,6 +33,9 @@ class SessionStore(Protocol):
     def get(self, session_id: str) -> SessionHandle | None:
         """按会话标识获取状态和串行锁。"""
 
+    def get_or_create(self, session_id: str) -> SessionHandle:
+        """获取或创建恢复运行所需的会话对象。"""
+
 
 class InMemorySessionStore:
     """在单进程内保存会话状态的第一版实现。"""
@@ -61,3 +64,12 @@ class InMemorySessionStore:
 
         with self._store_lock:
             return self._sessions.get(session_id)
+
+    def get_or_create(self, session_id: str) -> SessionHandle:
+        """为恢复流程返回 Store 内唯一的 SessionState 实例。"""
+        with self._store_lock:
+            handle = self._sessions.get(session_id)
+            if handle is None:
+                handle = SessionHandle(SessionState(session_id), Lock())
+                self._sessions[session_id] = handle
+            return handle

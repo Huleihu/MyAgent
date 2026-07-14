@@ -10,6 +10,7 @@ from typing import Any
 
 from my_agent.runtime.trace import NodeExecutionRecord
 from my_agent.state.session import SessionState
+from my_agent.state.run_state import RunState
 
 
 @dataclass
@@ -21,6 +22,7 @@ class RuntimeContext:
     node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     node_traces: list[NodeExecutionRecord] = field(default_factory=list)
     session_state: SessionState | None = None
+    run_state: RunState | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.user_input, str) or not self.user_input.strip():
@@ -37,6 +39,8 @@ class RuntimeContext:
             self.session_state, SessionState
         ):
             raise TypeError("session_state must be a SessionState or None")
+        if self.run_state is not None and not isinstance(self.run_state, RunState):
+            raise TypeError("run_state must be a RunState or None")
 
     def add_node_trace(self, trace: NodeExecutionRecord) -> None:
         """追加一条节点执行 Trace。"""

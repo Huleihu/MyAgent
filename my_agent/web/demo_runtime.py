@@ -31,6 +31,7 @@ from my_agent.runtime.node_runner import (
 )
 from my_agent.state.recorder import TraceRecorder
 from my_agent.state.session import SessionState
+from my_agent.state.checkpoint_store import CheckpointStore
 from my_agent.llm.deepseek import DeepSeekModelClient
 from my_agent.llm.settings import load_model_settings
 from my_agent.tools.executor import ToolExecutor
@@ -114,30 +115,30 @@ class DemoRagPlanner(Planner):
         return FinalAnswerAction(answer="\n\n".join(contents))
 
 
-def build_demo_runtime(session_state: SessionState) -> ConversationRuntime:
+def build_demo_runtime(session_state: SessionState, checkpoint_store: CheckpointStore | None = None) -> ConversationRuntime:
     """基于既有会话状态创建本次消息处理独占的演示 Runtime。"""
     if not isinstance(session_state, SessionState):
         raise TypeError("session_state must be a SessionState")
 
     registry = _build_demo_tool_registry()
-    return _assemble_runtime(session_state, registry, DemoRagPlanner())
+    return _assemble_runtime(session_state, registry, DemoRagPlanner(), checkpoint_store)
 
 
-def build_runtime(session_state: SessionState) -> ConversationRuntime:
+def build_runtime(session_state: SessionState, checkpoint_store: CheckpointStore | None = None) -> ConversationRuntime:
     """按环境变量选择离线 Demo 或 DeepSeek Runtime，不静默降级配置错误。"""
     if not isinstance(session_state, SessionState):
         raise TypeError("session_state must be a SessionState")
 
     settings = load_model_settings()
     if settings is None:
-        return build_demo_runtime(session_state)
+        return build_demo_runtime(session_state, checkpoint_store)
 
     registry = _build_demo_tool_registry()
     planner = LLMPlanner(
         model_client=DeepSeekModelClient(settings.model_config),
         tool_definitions=registry.list_definitions(),
     )
-    return _assemble_runtime(session_state, registry, planner)
+    return _assemble_runtime(session_state, registry, planner, checkpoint_store)
 
 
 def _build_demo_tool_registry() -> ToolRegistry:
@@ -151,6 +152,7 @@ def _assemble_runtime(
     session_state: SessionState,
     registry: ToolRegistry,
     planner: Planner,
+    checkpoint_store: CheckpointStore | None = None,
 ) -> ConversationRuntime:
     """复用既有 DSL、工具与会话状态装配单个 ConversationRuntime。"""
     workflow = WorkflowLoader().load_dict(_build_workflow_dict())
@@ -164,7 +166,7 @@ def _assemble_runtime(
             "message": MessageNodeRunner(),
         },
     )
-    return ConversationRuntime(executor=executor, session_state=session_state)
+    return ConversationRuntime(executor=executor, session_state=session_state, checkpoint_store=checkpoint_store, workflow_id=workflow.workflow_id)
 
 
 @lru_cache(maxsize=1)

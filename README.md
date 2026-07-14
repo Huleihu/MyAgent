@@ -175,3 +175,18 @@ $env:MYAGENT_LLM_MODEL="deepseek-v4-flash"
 ```
 
 当前 MVP 固定关闭 Thinking，并且每轮只支持一个工具调用。自动化测试注入 Fake SDK，不会调用 DeepSeek 或产生费用。可选真实冒烟测试仅应在本地设置密钥后，手动启动后端并发送一次聊天请求。
+# Runtime Checkpoint 恢复
+
+`ConversationRuntime.chat(user_input)` 保持原有用法，同时内部创建唯一 `run_id`；新代码可直接使用 `runtime.start(user_input)` 获取包含 `run_id` 的回合结果。为启用跨进程恢复，装配 Runtime 时传入同一个 `SQLiteCheckpointStore("checkpoint.db")`：
+
+```python
+runtime = build_runtime(session_state)
+result = runtime.start("查询资料")
+run_id = result.run_id
+
+# 重启后：用同一 session_id 新建 SessionState，重新装配 Runtime 和同一个数据库路径。
+restored_runtime = build_runtime(SessionState(session_id=session_state.session_id))
+result = restored_runtime.resume(run_id)
+```
+
+Checkpoint 会在用户消息、工具调用前、工具 observation、最终答案、节点完成、运行完成或失败后追加保存。恢复会跳过已经完成的节点；已成功且 observation 已写入 Checkpoint 的工具不会重复执行。当前不保证严格 exactly-once：若外部工具已成功但程序在保存 observation 前崩溃，恢复后仍可能重复调用该工具。

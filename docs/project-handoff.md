@@ -1730,3 +1730,14 @@ session_id 隔离。右侧 Trace 面板与历史回合选择绑定；Retrieval T
 启动时先运行 Python API，再进入 `frontend/`，复制 `.env.example` 为 `.env.local` 并执行
 `npm.cmd run dev`。前端检查命令为 `npm.cmd run lint`、`npm.cmd run typecheck`、
 `npm.cmd run test` 与 `npm.cmd run build`。
+## Checkpoint 第一阶段交接（2026-07-14）
+
+本阶段新增 `RunState`、`ExecutionCursor`、`PendingToolCall` 与 `CheckpointStore`，把会话消息、工具 Trace、节点输出/Trace、节点游标、Agent 轮次和待执行工具调用保存为版本化 Checkpoint。`SQLiteCheckpointStore` 以追加方式写入 JSON payload，并使用 WAL、`busy_timeout` 和 `BEGIN IMMEDIATE` 在同一事务中生成并插入同一 `run_id` 的 `sequence_no`。
+
+`ConversationRuntime.chat()` 保持兼容并委托 `start()`；`start()` 为每轮生成 `run_id`。`resume(run_id)` 读取最新 Checkpoint，恢复同一 `SessionState` 快照、重建 `RuntimeContext`，并从 Cursor 继续。`tool_pending` 直接执行已保存工具调用，`final_answer_written` 复用已保存答案；已完成运行抛出 `RunAlreadyCompletedError`。
+
+Web 新增 `POST /runs/{run_id}/resume`：从 Checkpoint 取得 `session_id`，以 `SessionStore.get_or_create()` 获取唯一 SessionState，在该对象上 `restore_snapshot()` 后装配 Runtime。因此恢复后的普通消息仍可读取历史用户消息、工具 observation 和最终回答。
+
+当前保证：工具成功且 Trace、结果和 observation 已保存后，恢复不重复执行该工具。当前不保证严格 exactly-once：若外部工具成功后、Checkpoint 保存前崩溃，恢复仍可能重复调用。严格保证需要外部工具的 call_id 幂等键、历史结果查询或事务性 Outbox。
+
+验证命令：`pytest tests -q`，当前 201 项通过。覆盖 RunState 序列化、SQLite 重建/序号、跨 Runtime 恢复、pending tool、final answer 恢复、completed run 拒绝恢复和 Web 会话连续性。

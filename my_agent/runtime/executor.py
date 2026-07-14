@@ -12,6 +12,7 @@ from my_agent.runtime.context import RuntimeContext
 from my_agent.runtime.graph import RuntimeGraph
 from my_agent.runtime.resolver import resolve_node_inputs
 from my_agent.runtime.trace import NodeExecutionRecord
+from my_agent.state.checkpoint_recorder import CheckpointRecorder
 
 
 class RuntimeExecutor:
@@ -21,6 +22,7 @@ class RuntimeExecutor:
         self,
         graph: RuntimeGraph,
         node_runners: dict[str, Any],
+        checkpoint_recorder: CheckpointRecorder | None = None,
     ) -> None:
         if not isinstance(graph, RuntimeGraph):
             raise TypeError("graph must be a RuntimeGraph")
@@ -29,13 +31,37 @@ class RuntimeExecutor:
 
         self._graph = graph
         self._node_runners = dict(node_runners)
+        self._checkpoint_recorder = checkpoint_recorder
+
+    def bind_checkpoint_recorder(self, checkpoint_recorder: CheckpointRecorder) -> None:
+        """为一次运行绑定状态保存器并传递给支持绑定的节点执行器。"""
+        self._checkpoint_recorder = checkpoint_recorder
+        for runner in self._node_runners.values():
+            if hasattr(runner, "bind_run_state"):
+                runner.bind_run_state(None, checkpoint_recorder)
+
+    def first_node_id(self) -> str:
+        """返回当前线性工作流首节点标识，供创建运行游标使用。"""
+        return self._graph.linear_nodes()[0].node_id
+
+    def bind_run_state(self, run_state, checkpoint_recorder: CheckpointRecorder) -> None:
+        """为恢复运行绑定同一 RunState 与保存器。"""
+        self._checkpoint_recorder = checkpoint_recorder
+        for runner in self._node_runners.values():
+            if hasattr(runner, "bind_run_state"):
+                runner.bind_run_state(run_state, checkpoint_recorder)
 
     def run(self, context: RuntimeContext) -> RuntimeContext:
         """按节点顺序执行工作流，并把每个节点输出写入上下文。"""
         if not isinstance(context, RuntimeContext):
             raise TypeError("context must be a RuntimeContext")
 
-        for node in self._graph.linear_nodes():
+        nodes = self._graph.linear_nodes()
+        start_index = 0
+        if context.run_state is not None:
+            ids = [node.node_id for node in nodes]
+            start_index = ids.index(context.run_state.cursor.next_node_id)
+        for node in nodes[start_index:]:
             runner = self._node_runners.get(node.node_type)
             if runner is None:
                 raise ValueError(f"missing node runner for type: {node.node_type}")
@@ -49,13 +75,38 @@ class RuntimeExecutor:
                 context.add_node_trace(
                     self._build_success_trace(node, inputs, output, started_at)
                 )
+                self._checkpoint_node_success(context, nodes, node)
             except Exception as exc:
                 context.add_node_trace(
                     self._build_failure_trace(node, inputs, exc, started_at)
                 )
+                if context.run_state is not None:
+                    context.run_state.status = __import__("my_agent.state.run_state", fromlist=["RunStatus"]).RunStatus.FAILED
+                    context.run_state.error = {"type": exc.__class__.__name__, "message": str(exc)}
+                    self._sync_run_state(context)
+                    if self._checkpoint_recorder is not None:
+                        self._checkpoint_recorder.record({"reason": "run_failed"})
                 raise
 
         return context
+
+    def _checkpoint_node_success(self, context, nodes, node) -> None:
+        """节点输出与游标同步后再写入快照，保证恢复时可跳过成功节点。"""
+        if context.run_state is None:
+            return
+        cursor = context.run_state.cursor
+        if node.node_id not in cursor.completed_node_ids:
+            cursor.completed_node_ids.append(node.node_id)
+        current = [item.node_id for item in nodes].index(node.node_id)
+        cursor.next_node_id = nodes[current + 1].node_id if current + 1 < len(nodes) else node.node_id
+        self._sync_run_state(context)
+        if self._checkpoint_recorder is not None:
+            self._checkpoint_recorder.record({"reason": "after_node_success", "node_id": node.node_id})
+
+    def _sync_run_state(self, context) -> None:
+        context.run_state.variables = dict(context.variables)
+        context.run_state.node_outputs = {key: dict(value) for key, value in context.node_outputs.items()}
+        context.run_state.node_traces = context.list_node_traces()
 
     def _build_success_trace(
         self,

@@ -12,6 +12,7 @@ from uuid import uuid4
 from my_agent.agent_loop.planner import FinalAnswerAction, Planner, ToolAction
 from my_agent.state.checkpoint_recorder import CheckpointRecorder
 from my_agent.state.session import SessionState
+from my_agent.state.run_state import PendingToolCall, RunState, RunStatus
 from my_agent.tools.executor import ToolExecutor
 from my_agent.tools.schema import ToolCallRequest, ToolCallResult
 
@@ -33,6 +34,7 @@ class ReActAgentLoop:
         session_state: SessionState,
         max_rounds: int = 5,
         checkpoint_recorder: CheckpointRecorder | None = None,
+        run_state: RunState | None = None,
     ) -> None:
         if not isinstance(planner, Planner):
             raise TypeError("planner must be a Planner")
@@ -52,20 +54,31 @@ class ReActAgentLoop:
         self._session_state = session_state
         self._max_rounds = max_rounds
         self._checkpoint_recorder = checkpoint_recorder
+        self._run_state = run_state
 
     def run(self, user_input: str) -> str:
         """执行多轮 Agent Loop，并返回最终助手输出文本。"""
         if not isinstance(user_input, str) or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
 
-        self._session_state.add_message("user", user_input)
-        self._record_checkpoint({"reason": "after_user_input", "round_index": 0})
+        if self._run_state is not None and self._run_state.cursor.agent_phase == "final_answer_written":
+            return self._read_saved_final_answer()
+        if self._run_state is None or self._run_state.cursor.agent_phase == "not_started":
+            self._session_state.add_message("user", user_input)
+            if self._run_state is not None:
+                self._run_state.cursor.agent_phase = "planning"
+                self._run_state.cursor.agent_round_index = 1
+            self._record_checkpoint({"reason": "after_user_input", "round_index": 0})
 
-        for round_index in range(1, self._max_rounds + 1):
-            action = self._planner.plan(user_input, self._session_state)
+        start_round = 1 if self._run_state is None else self._run_state.cursor.agent_round_index
+        for round_index in range(start_round, self._max_rounds + 1):
+            action = self._next_action(user_input)
 
             if isinstance(action, FinalAnswerAction):
                 self._session_state.add_message("assistant", action.answer)
+                if self._run_state is not None:
+                    self._run_state.cursor.agent_phase = "final_answer_written"
+                    self._run_state.cursor.agent_round_index = round_index
                 self._record_checkpoint(
                     {"reason": "after_final_answer", "round_index": round_index}
                 )
@@ -74,6 +87,10 @@ class ReActAgentLoop:
             if isinstance(action, ToolAction):
                 result = self._execute_tool_action(action)
                 self._add_tool_observation(action, result)
+                if self._run_state is not None:
+                    self._run_state.pending_tool_call = None
+                    self._run_state.cursor.agent_phase = "planning"
+                    self._run_state.cursor.agent_round_index = round_index + 1
                 self._record_checkpoint(
                     {
                         "reason": "after_tool_observation",
@@ -97,7 +114,27 @@ class ReActAgentLoop:
             arguments=action.arguments,
             call_id=call_id,
         )
+        if self._run_state is not None:
+            self._run_state.pending_tool_call = PendingToolCall(action.tool_name, dict(action.arguments), call_id)
+            self._run_state.cursor.agent_phase = "tool_pending"
+            self._record_checkpoint({"reason": "before_tool_execution", "round_index": self._run_state.cursor.agent_round_index})
         return self._tool_executor.execute(request)
+
+    def _next_action(self, user_input: str):
+        """优先消费已持久化的待执行工具，避免恢复时再次规划。"""
+        if self._run_state is not None and self._run_state.cursor.agent_phase == "tool_pending":
+            pending = self._run_state.pending_tool_call
+            if pending is None:
+                raise ValueError("tool_pending phase requires pending_tool_call")
+            return ToolAction(pending.tool_name, dict(pending.arguments), pending.call_id)
+        return self._planner.plan(user_input, self._session_state)
+
+    def _read_saved_final_answer(self) -> str:
+        """从已持久化最终回答恢复 agent 节点输出。"""
+        for message in reversed(self._session_state.list_messages()):
+            if message.role == "assistant" and message.metadata.get("message_type") != "tool_observation":
+                return message.content
+        raise ValueError("final_answer_written phase requires an assistant answer")
 
     def _format_tool_result_message(self, result: ToolCallResult) -> str:
         """把工具结果压缩成可读摘要，避免把大块检索结果直接塞进消息。"""
@@ -124,6 +161,10 @@ class ReActAgentLoop:
 
     def _record_checkpoint(self, metadata: dict[str, Any]) -> None:
         """在配置 Recorder 时记录会话快照。"""
+        if self._run_state is not None:
+            self._run_state.messages = self._session_state.list_messages()
+            self._run_state.tool_traces = self._session_state.list_tool_traces()
+            self._run_state.updated_at_utc = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
         if self._checkpoint_recorder is None:
             return
         self._checkpoint_recorder.record(metadata)

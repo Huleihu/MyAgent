@@ -19,6 +19,15 @@ from my_agent.runtime.trace import NodeExecutionRecord
 from my_agent.state.session import SessionState
 from my_agent.state.trace import ToolTraceRecord
 from my_agent.web.app import _extract_turn_citations
+from my_agent.web.session_store import InMemorySessionStore
+from my_agent.state.sqlite_checkpoint_store import SQLiteCheckpointStore
+from my_agent.state.checkpoint import Checkpoint
+from my_agent.state.run_state import ExecutionCursor, RunState, RunStatus
+from my_agent.state.trace import ToolTraceRecord
+from my_agent.state.session import SessionMessage
+from pathlib import Path
+from uuid import uuid4
+from tests.test_runtime_checkpoint_resume import HistoryPlanner, build_runtime
 
 
 class FakeConversationRuntime:
@@ -238,6 +247,39 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(first_citation["title"], "第一篇")
         self.assertEqual(citations[0]["doc_id"], "doc-1")
+
+    def test_web_resume_final_answer_written_preserves_session_for_next_message(self):
+        path = Path.cwd() / f"web-resume-{uuid4().hex}.db"
+        store = SQLiteCheckpointStore(path)
+        session_store = InMemorySessionStore()
+        counts = {"tool_a": 0, "tool_b": 0}
+        planner = HistoryPlanner(counts)
+        runtime_factory = lambda session: build_runtime(session, store, planner, counts)
+        app = __import__("my_agent.web.app", fromlist=["create_app"]).create_app(runtime_factory, session_store, store)
+        client = TestClient(app)
+        trace = ToolTraceRecord("trace-a", "tool_a", "call-a", {}, True, {"tool": "tool_a"}, None, 1.0)
+        state = RunState(
+            run_id="interrupted-run", session_id="recovered-session", workflow_id="checkpoint-test",
+            status=RunStatus.RUNNING, user_input="第一轮",
+            messages=[SessionMessage("user", "第一轮"), SessionMessage("assistant", "工具 tool_a 执行成功", {"message_type":"tool_observation", "tool_name":"tool_a", "call_id":"call-a"}), SessionMessage("assistant", "已完成")],
+            tool_traces=[trace], node_outputs={"begin":{"user_input":"第一轮"}},
+            cursor=ExecutionCursor("agent", ["begin"], 2, "final_answer_written"),
+        )
+        store.save(Checkpoint.create(state))
+        response = client.post("/runs/interrupted-run/resume")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(planner.calls, 0)
+        handle = session_store.get("recovered-session")
+        self.assertIsNotNone(handle)
+        restored_session = handle.session_state
+        self.assertEqual([item.content for item in restored_session.list_messages()], ["第一轮", "工具 tool_a 执行成功", "已完成"])
+        next_response = client.post("/sessions/recovered-session/messages", json={"user_input":"第二轮"})
+        self.assertEqual(next_response.status_code, 200)
+        self.assertIs(session_store.get("recovered-session").session_state, restored_session)
+        self.assertEqual(planner.calls, 2)
+        self.assertEqual(store.get_latest("interrupted-run").run_state.status, RunStatus.COMPLETED)
+        store.close()
+        if path.exists(): path.unlink()
 
 
 if __name__ == "__main__":

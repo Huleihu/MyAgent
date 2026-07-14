@@ -19,6 +19,7 @@ from my_agent.runtime.conversation import ConversationRuntime, ConversationTurnR
 from my_agent.state.session import SessionState
 from my_agent.web.demo_runtime import build_runtime
 from my_agent.web.session_store import InMemorySessionStore, SessionStore
+from my_agent.state.checkpoint_store import CheckpointStore, InMemoryCheckpointStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,16 @@ class MessageRequest(BaseModel):
 def create_app(
     runtime_factory: RuntimeFactory = build_runtime,
     session_store: SessionStore | None = None,
+    checkpoint_store: CheckpointStore | None = None,
 ) -> FastAPI:
     """创建具备独立会话 store 的最小 Runtime Web API。"""
     if not callable(runtime_factory):
         raise TypeError("runtime_factory must be callable")
 
     store = InMemorySessionStore() if session_store is None else session_store
+    checkpoints = InMemoryCheckpointStore() if checkpoint_store is None else checkpoint_store
+    if runtime_factory is build_runtime:
+        runtime_factory = lambda session: build_runtime(session, checkpoints)
     app = FastAPI(title="myAgent Runtime Demo", version="0.1.0")
 
     @app.get("/health")
@@ -82,6 +87,18 @@ def create_app(
 
         return _serialize_turn_result(session_id, turn_result)
 
+    @app.post("/runs/{run_id}/resume")
+    def resume_run(run_id: str) -> dict:
+        """将 Checkpoint 恢复到 Store 中唯一的 SessionState 后继续执行。"""
+        checkpoint = checkpoints.get_latest(run_id)
+        if checkpoint is None or checkpoint.run_state is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
+        handle = store.get_or_create(checkpoint.run_state.session_id)
+        with handle.lock:
+            handle.session_state.restore_snapshot(checkpoint.run_state.messages, checkpoint.run_state.tool_traces)
+            result = runtime_factory(handle.session_state).resume(run_id)
+        return _serialize_turn_result(handle.session_state.session_id, result)
+
     return app
 
 
@@ -92,6 +109,7 @@ def _serialize_turn_result(
     """将 Runtime 回合结果转换为对外稳定 JSON 数据。"""
     return {
         "session_id": session_id,
+        "run_id": turn_result.run_id,
         "output_text": turn_result.output_text,
         "citations": _extract_turn_citations(turn_result.tool_traces),
         "node_traces": [asdict(trace) for trace in turn_result.node_traces],

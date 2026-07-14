@@ -79,3 +79,16 @@ class SessionState:
     def list_tool_traces(self) -> list[ToolTraceRecord]:
         """返回工具调用 Trace 列表副本，避免调用方直接修改内部状态。"""
         return list(self.tool_traces)
+
+    def restore_snapshot(
+        self,
+        messages: list[SessionMessage],
+        tool_traces: list[ToolTraceRecord],
+    ) -> None:
+        """用已验证的持久化快照恢复同一会话对象，供 Runtime 重建时同步 Store。"""
+        if not isinstance(messages, list) or not all(isinstance(item, SessionMessage) for item in messages):
+            raise ValueError("messages must be a list[SessionMessage]")
+        if not isinstance(tool_traces, list) or not all(isinstance(item, ToolTraceRecord) for item in tool_traces):
+            raise ValueError("tool_traces must be a list[ToolTraceRecord]")
+        self.messages = list(messages)
+        self.tool_traces = list(tool_traces)
