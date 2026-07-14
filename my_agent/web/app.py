@@ -17,7 +17,7 @@ from pydantic import BaseModel, field_validator
 
 from my_agent.runtime.conversation import ConversationRuntime, ConversationTurnResult
 from my_agent.state.session import SessionState
-from my_agent.web.demo_runtime import build_demo_runtime
+from my_agent.web.demo_runtime import build_runtime
 from my_agent.web.session_store import InMemorySessionStore, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class MessageRequest(BaseModel):
 
 
 def create_app(
-    runtime_factory: RuntimeFactory = build_demo_runtime,
+    runtime_factory: RuntimeFactory = build_runtime,
     session_store: SessionStore | None = None,
 ) -> FastAPI:
     """创建具备独立会话 store 的最小 Runtime Web API。"""

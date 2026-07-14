@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from my_agent.agent_loop.planner import FinalAnswerAction, Planner, ToolAction
+from my_agent.agent_loop.llm_planner import LLMPlanner
 from my_agent.agent_loop.react import ReActAgentLoop
 from my_agent.dsl.loader import WorkflowLoader
 from my_agent.rag.indexing.chunker import TextChunker
@@ -30,6 +31,8 @@ from my_agent.runtime.node_runner import (
 )
 from my_agent.state.recorder import TraceRecorder
 from my_agent.state.session import SessionState
+from my_agent.llm.deepseek import DeepSeekModelClient
+from my_agent.llm.settings import load_model_settings
 from my_agent.tools.executor import ToolExecutor
 from my_agent.tools.registry import ToolRegistry
 
@@ -116,18 +119,43 @@ def build_demo_runtime(session_state: SessionState) -> ConversationRuntime:
     if not isinstance(session_state, SessionState):
         raise TypeError("session_state must be a SessionState")
 
-    workflow = WorkflowLoader().load_dict(_build_workflow_dict())
+    registry = _build_demo_tool_registry()
+    return _assemble_runtime(session_state, registry, DemoRagPlanner())
+
+
+def build_runtime(session_state: SessionState) -> ConversationRuntime:
+    """按环境变量选择离线 Demo 或 DeepSeek Runtime，不静默降级配置错误。"""
+    if not isinstance(session_state, SessionState):
+        raise TypeError("session_state must be a SessionState")
+
+    settings = load_model_settings()
+    if settings is None:
+        return build_demo_runtime(session_state)
+
+    registry = _build_demo_tool_registry()
+    planner = LLMPlanner(
+        model_client=DeepSeekModelClient(settings.model_config),
+        tool_definitions=registry.list_definitions(),
+    )
+    return _assemble_runtime(session_state, registry, planner)
+
+
+def _build_demo_tool_registry() -> ToolRegistry:
+    """创建只读演示知识库对应的工具注册表。"""
     registry = ToolRegistry()
     registry.register(_get_demo_retrieval_tool())
-    tool_executor = ToolExecutor(
-        registry,
-        trace_recorder=TraceRecorder(session_state),
-    )
-    agent_loop = ReActAgentLoop(
-        planner=DemoRagPlanner(),
-        tool_executor=tool_executor,
-        session_state=session_state,
-    )
+    return registry
+
+
+def _assemble_runtime(
+    session_state: SessionState,
+    registry: ToolRegistry,
+    planner: Planner,
+) -> ConversationRuntime:
+    """复用既有 DSL、工具与会话状态装配单个 ConversationRuntime。"""
+    workflow = WorkflowLoader().load_dict(_build_workflow_dict())
+    tool_executor = ToolExecutor(registry, trace_recorder=TraceRecorder(session_state))
+    agent_loop = ReActAgentLoop(planner=planner, tool_executor=tool_executor, session_state=session_state)
     executor = RuntimeExecutor(
         graph=RuntimeGraph(workflow),
         node_runners={

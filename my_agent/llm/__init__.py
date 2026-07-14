@@ -6,9 +6,11 @@
 from my_agent.llm.client import ModelClient
 from my_agent.llm.config import ModelConfig
 from my_agent.llm.fake import FakeModelClient
+from my_agent.llm.deepseek import DeepSeekModelClient
 
 __all__ = [
     "FakeModelClient",
+    "DeepSeekModelClient",
     "ModelClient",
     "ModelConfig",
 ]

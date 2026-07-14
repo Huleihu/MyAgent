@@ -143,3 +143,17 @@ npm.cmd run build
 
 - [项目交接与设计说明](docs/project-handoff.md)
 - [前端说明](frontend/README.md)
+# DeepSeek Provider MVP
+
+默认不设置 `MYAGENT_LLM_PROVIDER` 时，Web Demo 继续使用离线、确定性的 `DemoRagPlanner`，不会访问模型服务。
+
+如需启用 DeepSeek，可先复制模板：`Copy-Item .env.example .env`。随后将其中变量设置到后端进程环境中，并填写本地 `DEEPSEEK_API_KEY`；不要将 `.env` 或真实密钥提交到 Git。默认模型为 `deepseek-v4-flash`，地址为 `https://api.deepseek.com`。
+
+```powershell
+$env:MYAGENT_LLM_PROVIDER="deepseek"
+$env:DEEPSEEK_API_KEY="在本机设置的密钥"
+$env:MYAGENT_LLM_MODEL="deepseek-v4-flash"
+& 'D:\software\Anaconda\envs\myagent-py311\python.exe' -m uvicorn my_agent.web.app:app --reload
+```
+
+当前 MVP 固定关闭 Thinking，并且每轮只支持一个工具调用。自动化测试注入 Fake SDK，不会调用 DeepSeek 或产生费用。可选真实冒烟测试仅应在本地设置密钥后，手动启动后端并发送一次聊天请求。

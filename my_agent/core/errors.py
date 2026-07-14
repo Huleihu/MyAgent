@@ -22,3 +22,19 @@ class ToolValidationError(ToolError):
 
 class ToolExecutionError(ToolError):
     """表示工具执行过程失败。"""
+
+
+class ModelError(Exception):
+    """表示模型配置、调用或响应转换中的安全错误。"""
+
+
+class ModelConfigurationError(ModelError):
+    """表示模型 Provider 配置缺失或不符合约束。"""
+
+
+class ModelClientError(ModelError):
+    """表示调用模型服务时发生的可安全展示错误。"""
+
+
+class ModelResponseError(ModelClientError):
+    """表示模型响应不符合项目内部协议。"""

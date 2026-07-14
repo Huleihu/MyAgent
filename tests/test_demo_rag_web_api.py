@@ -14,11 +14,12 @@ warnings.filterwarnings(
 from starlette.testclient import TestClient
 
 from my_agent.web.app import create_app
+from my_agent.web.demo_runtime import build_demo_runtime
 
 
 class DemoRagWebApiTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(create_app())
+        self.client = TestClient(create_app(runtime_factory=build_demo_runtime))
 
     def create_session(self) -> str:
         response = self.client.post("/sessions")

@@ -271,6 +271,7 @@ class AgentLoopTest(unittest.TestCase):
         self.assertEqual(tool_checkpoint.metadata["call_id"], "tool-call-1")
         self.assertTrue(tool_checkpoint.metadata["success"])
         self.assertEqual(tool_messages[-1].metadata["message_type"], "tool_observation")
+        self.assertEqual(tool_messages[-1].metadata["arguments"], {"a": 2, "b": 3})
         self.assertEqual(len(tool_checkpoint.list_tool_traces()), 1)
         self.assertEqual(checkpoints[2].metadata["reason"], "after_final_answer")
         self.assertEqual(checkpoints[2].metadata["round_index"], 2)

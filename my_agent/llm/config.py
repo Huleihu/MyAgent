@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _validate_non_empty_text(field_name: str, field_value: str) -> None:
@@ -20,7 +20,7 @@ class ModelConfig:
 
     provider: str
     model_name: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     base_url: str | None = None
     temperature: float = 0.0
     max_tokens: int | None = None

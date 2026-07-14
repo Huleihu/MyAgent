@@ -73,7 +73,7 @@ class ReActAgentLoop:
 
             if isinstance(action, ToolAction):
                 result = self._execute_tool_action(action)
-                self._add_tool_observation(result)
+                self._add_tool_observation(action, result)
                 self._record_checkpoint(
                     {
                         "reason": "after_tool_observation",
@@ -108,7 +108,7 @@ class ReActAgentLoop:
         error_text = json.dumps(result.error, ensure_ascii=False, sort_keys=True)
         return f"工具 {result.name} 执行失败，错误：{error_text}"
 
-    def _add_tool_observation(self, result: ToolCallResult) -> None:
+    def _add_tool_observation(self, action: ToolAction, result: ToolCallResult) -> None:
         """把工具执行结果作为 observation 写入会话，供下一轮 Planner 使用。"""
         self._session_state.add_message(
             "assistant",
@@ -117,6 +117,7 @@ class ReActAgentLoop:
                 "message_type": "tool_observation",
                 "tool_name": result.name,
                 "call_id": result.call_id,
+                "arguments": dict(action.arguments),
                 "success": result.success,
             },
         )
