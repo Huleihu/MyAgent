@@ -46,6 +46,24 @@ conda run -n myagent-py311 uvicorn my_agent.web.app:app --reload --port 8000
 
 健康检查地址：<http://127.0.0.1:8000/health>
 
+### 一键启动与停止本地开发服务
+
+在项目根目录执行以下命令即可启动 Python 后端与 Next.js 前端。脚本只清除其自身和子进程的代理变量，不会修改系统代理或 `.env`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+```
+
+也可以直接双击项目根目录的 `start-dev.cmd`。脚本会优先使用 `MYAGENT_PYTHON` 指定的解释器，再尝试查找名为 `myagent-py311` 的 Conda 环境。
+
+默认会打开 <http://localhost:3000>。如不希望打开浏览器，附加 `-NoBrowser`；如当前终端未激活项目 Python 环境，可通过 `-PythonExecutable` 指定解释器路径。停止两个开发服务：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
+```
+
+也可以直接双击项目根目录的 `stop-dev.cmd` 停止服务。
+
 ### 启动前端控制台
 
 另开一个终端：
