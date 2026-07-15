@@ -76,12 +76,16 @@ class Checkpoint:
         )
 
     @classmethod
-    def create(cls, run_state: RunState) -> "Checkpoint":
+    def create(
+        cls, run_state: RunState, metadata: dict[str, Any] | None = None
+    ) -> "Checkpoint":
         """从完整运行状态创建可持久化快照。"""
         if not isinstance(run_state, RunState):
             raise TypeError("run_state must be a RunState")
         snapshot = RunState.from_dict(run_state.to_dict())
-        return cls(checkpoint_id=__import__("uuid").uuid4().hex, session_id=snapshot.session_id, messages=snapshot.messages, tool_traces=snapshot.tool_traces, metadata={}, run_state=snapshot)
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("metadata must be a dict or None")
+        return cls(checkpoint_id=__import__("uuid").uuid4().hex, session_id=snapshot.session_id, messages=snapshot.messages, tool_traces=snapshot.tool_traces, metadata={} if metadata is None else dict(metadata), run_state=snapshot)
 
     def with_sequence_no(self, sequence_no: int) -> "Checkpoint":
         """返回带数据库追加序号的新不可变快照。"""

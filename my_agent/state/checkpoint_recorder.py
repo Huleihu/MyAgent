@@ -37,7 +37,7 @@ class CheckpointRecorder:
             metadata={} if metadata is None else dict(metadata),
         )
         if self._run_state is not None:
-            checkpoint = Checkpoint.create(self._run_state)
+            checkpoint = Checkpoint.create(self._run_state, metadata)
             checkpoint = self._store.save(checkpoint)
         self._checkpoints.append(checkpoint)
         return checkpoint

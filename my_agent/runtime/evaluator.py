@@ -38,7 +38,8 @@ class RuntimeEvaluator:
                 raise TypeError("runtime_factory must return a ConversationRuntime")
             turn_result = runtime.chat(case.user_input)
         except Exception as exc:
-            return self._build_execution_failure_result(case, exc)
+            root_error = exc.__cause__ if exc.__cause__ is not None else exc
+            return self._build_execution_failure_result(case, root_error)
 
         actual_node_ids = tuple(trace.node_id for trace in turn_result.node_traces)
         actual_tool_calls = tuple(

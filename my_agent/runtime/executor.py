@@ -59,6 +59,8 @@ class RuntimeExecutor:
         nodes = self._graph.linear_nodes()
         start_index = 0
         if context.run_state is not None:
+            if context.run_state.cursor.next_node_id is None:
+                return context
             ids = [node.node_id for node in nodes]
             start_index = ids.index(context.run_state.cursor.next_node_id)
         for node in nodes[start_index:]:
@@ -98,7 +100,7 @@ class RuntimeExecutor:
         if node.node_id not in cursor.completed_node_ids:
             cursor.completed_node_ids.append(node.node_id)
         current = [item.node_id for item in nodes].index(node.node_id)
-        cursor.next_node_id = nodes[current + 1].node_id if current + 1 < len(nodes) else node.node_id
+        cursor.next_node_id = nodes[current + 1].node_id if current + 1 < len(nodes) else None
         self._sync_run_state(context)
         if self._checkpoint_recorder is not None:
             self._checkpoint_recorder.record({"reason": "after_node_success", "node_id": node.node_id})

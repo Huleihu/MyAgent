@@ -177,6 +177,15 @@ $env:MYAGENT_LLM_MODEL="deepseek-v4-flash"
 当前 MVP 固定关闭 Thinking，并且每轮只支持一个工具调用。自动化测试注入 Fake SDK，不会调用 DeepSeek 或产生费用。可选真实冒烟测试仅应在本地设置密钥后，手动启动后端并发送一次聊天请求。
 # Runtime Checkpoint 恢复
 
+Web 服务默认使用 SQLite Checkpoint。可通过 `MYAGENT_CHECKPOINT_DB_PATH` 指定数据库文件；未设置时使用工作目录下的 `.myagent/checkpoints.sqlite3`。数据库父目录会自动创建，应用关闭时会关闭自己创建的连接。
+当前模块级 `my_agent.web.app:app` 会在导入时初始化默认 Store；`.myagent/` 已被 Git 忽略。将默认 Store 延迟到 lifespan startup 创建属于后续可选技术债，不阻塞当前恢复闭环。
+
+运行状态接口：
+
+- `GET /runs/{run_id}`：读取最新 Checkpoint 的稳定摘要；失败 error 不暴露内部异常详情。
+- `POST /runs/{run_id}/resume`：恢复未完成或失败的运行；已完成运行返回 `409` 和 `run_already_completed`。
+- 已创建运行后发生执行失败时，消息或恢复响应会返回 `run_id`、`session_id` 与 `status: failed`，可据此查询或恢复。
+
 `ConversationRuntime.chat(user_input)` 保持原有用法，同时内部创建唯一 `run_id`；新代码可直接使用 `runtime.start(user_input)` 获取包含 `run_id` 的回合结果。为启用跨进程恢复，装配 Runtime 时传入同一个 `SQLiteCheckpointStore("checkpoint.db")`：
 
 ```python

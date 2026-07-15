@@ -26,6 +26,15 @@ class RunAlreadyCompletedError(ValueError):
     """表示已完成运行不能再次恢复。"""
 
 
+class RunExecutionFailedError(RuntimeError, ValueError):
+    """表示已创建运行在执行阶段失败，供 HTTP 层安全返回恢复标识。"""
+
+    def __init__(self, run_id: str, session_id: str, message: str = "runtime execution failed") -> None:
+        super().__init__(message)
+        self.run_id = run_id
+        self.session_id = session_id
+
+
 @dataclass(frozen=True)
 class ConversationTurnResult:
     """保存一次对话回合的最终文本、上下文及 Trace 快照。"""
@@ -76,24 +85,24 @@ class ConversationRuntime:
     def start(self, user_input: str) -> ConversationTurnResult:
         """创建带唯一 run_id 的可持久化运行并执行当前回合。"""
         tool_trace_start_index = len(self._session_state.list_tool_traces())
-        run_state = RunState(run_id=str(uuid4()), session_id=self._session_state.session_id, workflow_id=self._workflow_id, status=RunStatus.RUNNING, user_input=user_input, messages=self._session_state.list_messages(), tool_traces=self._session_state.list_tool_traces(), cursor=ExecutionCursor(next_node_id=self._executor.first_node_id()))
+        run_state = RunState(run_id=str(uuid4()), session_id=self._session_state.session_id, workflow_id=self._workflow_id, status=RunStatus.RUNNING, user_input=user_input, messages=self._session_state.list_messages(), tool_traces=self._session_state.list_tool_traces(), cursor=ExecutionCursor(next_node_id=self._executor.first_node_id()), tool_trace_start_index=tool_trace_start_index)
         recorder = CheckpointRecorder(self._session_state, run_state, self._checkpoint_store)
-        self._executor.bind_run_state(run_state, recorder)
-        runtime_context = RuntimeContext(
-            user_input=user_input,
-            session_state=self._session_state,
-            run_state=run_state,
-        )
-        self._executor.run(runtime_context)
-        run_state.status = RunStatus.COMPLETED
-        run_state.cursor.agent_phase = "completed"
-        run_state.messages = self._session_state.list_messages(); run_state.tool_traces = self._session_state.list_tool_traces()
-        recorder.record({"reason": "run_completed"})
+        try:
+            self._executor.bind_run_state(run_state, recorder)
+            runtime_context = RuntimeContext(user_input=user_input, session_state=self._session_state, run_state=run_state)
+            self._executor.run(runtime_context)
+            output_text = self._read_last_message(runtime_context)
+            run_state.status = RunStatus.COMPLETED
+            run_state.cursor.agent_phase = "completed"
+            run_state.messages = self._session_state.list_messages(); run_state.tool_traces = self._session_state.list_tool_traces()
+            recorder.record({"reason": "run_completed"})
+        except Exception as exc:
+            self._record_execution_failure(run_state, recorder, exc)
+            raise RunExecutionFailedError(run_state.run_id, run_state.session_id, str(exc)) from exc
 
-        output_text = self._read_last_message(runtime_context)
         node_traces = tuple(runtime_context.list_node_traces())
         tool_traces = tuple(
-            self._session_state.list_tool_traces()[tool_trace_start_index:]
+            self._session_state.list_tool_traces()[run_state.tool_trace_start_index:]
         )
         return ConversationTurnResult(
             output_text=output_text,
@@ -110,13 +119,20 @@ class ConversationRuntime:
         state = checkpoint.run_state
         if state.status is RunStatus.COMPLETED: raise RunAlreadyCompletedError("run is already completed")
         if state.session_id != self._session_state.session_id: raise ValueError("session_id does not match runtime")
-        self._session_state.restore_snapshot(state.messages, state.tool_traces)
         recorder = CheckpointRecorder(self._session_state, state, self._checkpoint_store)
-        self._executor.bind_run_state(state, recorder)
-        context = RuntimeContext(state.user_input, dict(state.variables), dict(state.node_outputs), list(state.node_traces), self._session_state, state)
-        self._executor.run(context)
-        state.status = RunStatus.COMPLETED; state.cursor.agent_phase = "completed"; state.messages = self._session_state.list_messages(); state.tool_traces = self._session_state.list_tool_traces(); recorder.record({"reason": "run_completed"})
-        return ConversationTurnResult(self._read_last_message(context), context, tuple(context.list_node_traces()), tuple(self._session_state.list_tool_traces()), run_id)
+        try:
+            self._session_state.restore_snapshot(state.messages, state.tool_traces)
+            state.status = RunStatus.RUNNING
+            state.error = None
+            self._executor.bind_run_state(state, recorder)
+            context = RuntimeContext(state.user_input, dict(state.variables), dict(state.node_outputs), list(state.node_traces), self._session_state, state)
+            self._executor.run(context)
+            output_text = self._read_last_message(context)
+            state.status = RunStatus.COMPLETED; state.cursor.agent_phase = "completed"; state.messages = self._session_state.list_messages(); state.tool_traces = self._session_state.list_tool_traces(); recorder.record({"reason": "run_completed"})
+        except Exception as exc:
+            self._record_execution_failure(state, recorder, exc)
+            raise RunExecutionFailedError(state.run_id, state.session_id, str(exc)) from exc
+        return ConversationTurnResult(output_text, context, tuple(context.list_node_traces()), tuple(self._session_state.list_tool_traces()[state.tool_trace_start_index:]), run_id)
 
     def _read_last_message(self, runtime_context: RuntimeContext) -> str:
         """读取 message 节点约定写入的最终文本，并转换为明确错误。"""
@@ -132,3 +148,19 @@ class ConversationRuntime:
                 "last_message must be a non-empty string"
             )
         return output_text
+
+    def _record_execution_failure(
+        self, run_state: RunState, recorder: CheckpointRecorder, error: Exception
+    ) -> None:
+        """记录输出契约等执行后置校验失败，避免遗留 running 快照。"""
+        if run_state.status is RunStatus.FAILED:
+            return
+        run_state.status = RunStatus.FAILED
+        run_state.error = {"type": error.__class__.__name__, "message": str(error)}
+        run_state.messages = self._session_state.list_messages()
+        run_state.tool_traces = self._session_state.list_tool_traces()
+        try:
+            recorder.record({"reason": "run_failed"})
+        except Exception:
+            # 原始执行异常更能说明失败原因；存储故障不能掩盖它。
+            pass

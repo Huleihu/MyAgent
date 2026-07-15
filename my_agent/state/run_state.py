@@ -45,14 +45,16 @@ class PendingToolCall:
 class ExecutionCursor:
     """记录 Runtime 与 Agent Loop 的下一步执行位置。"""
 
-    next_node_id: str
+    next_node_id: str | None
     completed_node_ids: list[str] = field(default_factory=list)
     agent_round_index: int = 0
     agent_phase: str = "not_started"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.next_node_id, str) or not self.next_node_id.strip():
-            raise ValueError("next_node_id must be a non-empty string")
+        if self.next_node_id is not None and (
+            not isinstance(self.next_node_id, str) or not self.next_node_id.strip()
+        ):
+            raise ValueError("next_node_id must be a non-empty string or None")
         if not isinstance(self.completed_node_ids, list) or not all(
             isinstance(node_id, str) and node_id.strip()
             for node_id in self.completed_node_ids
@@ -82,6 +84,7 @@ class RunState:
         default_factory=lambda: ExecutionCursor(next_node_id="begin")
     )
     pending_tool_call: PendingToolCall | None = None
+    tool_trace_start_index: int = 0
     created_at_utc: str = field(default_factory=lambda: _utc_now())
     updated_at_utc: str = field(default_factory=lambda: _utc_now())
     error: dict[str, Any] | None = None
@@ -120,6 +123,8 @@ class RunState:
             raise TypeError("pending_tool_call must be a PendingToolCall or None")
         if self.error is not None and not isinstance(self.error, dict):
             raise ValueError("error must be a dict or None")
+        if not isinstance(self.tool_trace_start_index, int) or self.tool_trace_start_index < 0:
+            raise ValueError("tool_trace_start_index must be a non-negative integer")
 
     def to_dict(self) -> dict[str, Any]:
         """转换为仅由 JSON 基础类型组成的持久化数据。"""
@@ -174,6 +179,7 @@ class RunState:
                 "arguments": deepcopy(self.pending_tool_call.arguments),
                 "call_id": self.pending_tool_call.call_id,
             },
+            "tool_trace_start_index": self.tool_trace_start_index,
             "created_at_utc": self.created_at_utc,
             "updated_at_utc": self.updated_at_utc,
             "error": deepcopy(self.error),
@@ -201,6 +207,7 @@ class RunState:
             pending_tool_call=(
                 None if pending_payload is None else PendingToolCall(**pending_payload)
             ),
+            tool_trace_start_index=payload.get("tool_trace_start_index", 0),
             created_at_utc=payload["created_at_utc"],
             updated_at_utc=payload["updated_at_utc"],
             error=deepcopy(payload.get("error")),

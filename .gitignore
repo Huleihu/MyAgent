@@ -46,3 +46,4 @@ frontend/.frontend-dev*.log
 
 # 视觉方案辅助页的本地草图与交互状态
 .superpowers/
+.myagent/

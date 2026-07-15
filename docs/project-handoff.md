@@ -1732,6 +1732,15 @@ session_id 隔离。右侧 Trace 面板与历史回合选择绑定；Retrieval T
 `npm.cmd run test` 与 `npm.cmd run build`。
 ## Checkpoint 第一阶段交接（2026-07-14）
 
+## Checkpoint Hardening（2026-07-15）
+
+默认 Web App 已通过 `MYAGENT_CHECKPOINT_DB_PATH` 接入 SQLite Checkpoint；未配置时使用 `.myagent/checkpoints.sqlite3`。同一 Store 的 SQLite Connection 以进程内 `RLock` 串行化 `save/get_latest/close`，WAL 与 `busy_timeout` 保留跨连接、跨进程的竞争处理。
+当前导入 `my_agent.web.app` 会初始化模块级默认 Store，`.myagent/` 已加入 Git 忽略规则；延迟到 lifespan startup 创建 Store 作为后续可选技术债，不阻塞本阶段。
+
+新增 `GET /runs/{run_id}` 返回 Checkpoint 摘要，公开错误使用稳定 code/message，不暴露内部异常文本。已创建 run 的执行失败响应会包含恢复所需的 `run_id`、`session_id` 和 `status=failed`；Runtime 初始化失败不伪造 run 标识。已完成 run 仍可查询，但 resume 返回 `409 run_already_completed`。
+
+`tool_trace_start_index` 用于让 resume 响应只返回当前 run 的 Tool Trace，缺失该字段的旧 Checkpoint 默认按 `0` 处理，因此可能包含历史 Trace。最后 Runtime 节点完成后 Cursor 的 `next_node_id` 为 `None`。恢复成功后会清除旧 error，并且只有 Runtime 与最终输出契约均成功后才写入 completed Checkpoint。
+
 本阶段新增 `RunState`、`ExecutionCursor`、`PendingToolCall` 与 `CheckpointStore`，把会话消息、工具 Trace、节点输出/Trace、节点游标、Agent 轮次和待执行工具调用保存为版本化 Checkpoint。`SQLiteCheckpointStore` 以追加方式写入 JSON payload，并使用 WAL、`busy_timeout` 和 `BEGIN IMMEDIATE` 在同一事务中生成并插入同一 `run_id` 的 `sequence_no`。
 
 `ConversationRuntime.chat()` 保持兼容并委托 `start()`；`start()` 为每轮生成 `run_id`。`resume(run_id)` 读取最新 Checkpoint，恢复同一 `SessionState` 快照、重建 `RuntimeContext`，并从 Cursor 继续。`tool_pending` 直接执行已保存工具调用，`final_answer_written` 复用已保存答案；已完成运行抛出 `RunAlreadyCompletedError`。
