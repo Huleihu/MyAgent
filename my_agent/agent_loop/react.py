@@ -56,6 +56,23 @@ class ReActAgentLoop:
         self._checkpoint_recorder = checkpoint_recorder
         self._run_state = run_state
 
+    def bind_run_state(
+        self,
+        run_state: RunState | None,
+        checkpoint_recorder: CheckpointRecorder | None,
+    ) -> None:
+        """为当前 Runtime 回合绑定恢复状态，不替换 Planner 或工具执行器。"""
+        if run_state is not None and not isinstance(run_state, RunState):
+            raise TypeError("run_state must be a RunState or None")
+        if checkpoint_recorder is not None and not isinstance(
+            checkpoint_recorder, CheckpointRecorder
+        ):
+            raise TypeError(
+                "checkpoint_recorder must be a CheckpointRecorder or None"
+            )
+        self._run_state = run_state
+        self._checkpoint_recorder = checkpoint_recorder
+
     def run(self, user_input: str) -> str:
         """执行多轮 Agent Loop，并返回最终助手输出文本。"""
         if not isinstance(user_input, str) or not user_input.strip():

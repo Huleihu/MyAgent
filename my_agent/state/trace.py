@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from my_agent.core.json_value import validate_json_native
+
 
 def _validate_non_empty_text(field_name: str, field_value: str) -> None:
     """校验 Trace 关键文本字段，避免生成无法定位的执行记录。"""
@@ -59,6 +61,10 @@ class ToolTraceRecord:
         _validate_optional_dict("result", self.result)
         _validate_optional_dict("error", self.error)
         _validate_optional_dict("token_usage", self.token_usage)
+        validate_json_native(self.arguments)
+        for field_value in (self.result, self.error, self.token_usage):
+            if field_value is not None:
+                validate_json_native(field_value)
 
         if self.success and self.result is None:
             raise ValueError("result must be a dict when success is True")

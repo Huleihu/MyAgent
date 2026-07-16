@@ -47,6 +47,21 @@ class DeepSeekModelClientTest(unittest.TestCase):
         self.assertEqual(request["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertNotIn("tags", request["tools"][0]["function"])
 
+    def test_omits_tool_fields_when_planner_requests_no_tools(self):
+        client = self.build_client(
+            [completion(SimpleNamespace(content="plan json", tool_calls=None))]
+        )
+
+        response = client.chat(
+            [{"role": "user", "content": "create a plan", "metadata": {}}],
+            [],
+        )
+
+        request = self.sdk_client.chat.completions.calls[0]
+        self.assertEqual(response["answer"], "plan json")
+        self.assertNotIn("tools", request)
+        self.assertNotIn("tool_choice", request)
+
     def test_converts_tool_call_and_rebuilds_observation_history(self):
         tool_call = SimpleNamespace(id="call-1", function=SimpleNamespace(name="retrieval_search", arguments='{"query":"中文"}'))
         client = self.build_client([completion(SimpleNamespace(content=None, tool_calls=[tool_call]))])
@@ -56,6 +71,50 @@ class DeepSeekModelClientTest(unittest.TestCase):
         self.assertEqual([message["role"] for message in request_messages], ["user", "assistant", "tool"])
         self.assertEqual(request_messages[1]["tool_calls"][0]["function"]["name"], "retrieval_search")
         self.assertEqual(request_messages[2]["content"], "tool result")
+
+    def test_rebuilds_multiple_loop_observations_before_next_step_decision(self):
+        client = self.build_client(
+            [completion(SimpleNamespace(content='{"action":"complete_step","result_summary":"done"}', tool_calls=None))]
+        )
+        observations = [
+            {
+                "role": "assistant",
+                "content": "first result",
+                "metadata": {
+                    "message_type": "tool_observation",
+                    "tool_name": "retrieval.search",
+                    "call_id": "loop-call-1",
+                    "arguments": {"query": "first"},
+                    "success": True,
+                },
+            },
+            {
+                "role": "assistant",
+                "content": "second result",
+                "metadata": {
+                    "message_type": "tool_observation",
+                    "tool_name": "retrieval.search",
+                    "call_id": "loop-call-2",
+                    "arguments": {"query": "second"},
+                    "success": True,
+                },
+            },
+        ]
+
+        client.chat(
+            [{"role": "user", "content": "question", "metadata": {}}]
+            + observations
+            + [{"role": "user", "content": "decide next step", "metadata": {}}],
+            tool_definitions(),
+        )
+
+        request_messages = self.sdk_client.chat.completions.calls[0]["messages"]
+        self.assertEqual(
+            [message["role"] for message in request_messages],
+            ["user", "assistant", "tool", "assistant", "tool", "user"],
+        )
+        self.assertEqual(request_messages[2]["tool_call_id"], "loop-call-1")
+        self.assertEqual(request_messages[4]["tool_call_id"], "loop-call-2")
 
     def test_rejects_multiple_or_unknown_tool_calls(self):
         first = SimpleNamespace(id="call-1", function=SimpleNamespace(name="retrieval_search", arguments="{}"))

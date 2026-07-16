@@ -58,7 +58,45 @@ class FailingNodeRunner:
         raise RuntimeError("boom")
 
 
+class RunOnlyLoop:
+    """模拟旧版只提供 run() 的无状态自定义 Loop。"""
+
+    def run(self, user_input):
+        return user_input
+
+
+class BindableLoopSpy:
+    """记录 Runtime 是否通过公开接口绑定状态。"""
+
+    def __init__(self):
+        self.bind_calls = []
+
+    def run(self, user_input):
+        return "完成"
+
+    def bind_run_state(self, run_state, checkpoint_recorder):
+        self.bind_calls.append((run_state, checkpoint_recorder))
+
+
 class DslRuntimeTest(unittest.TestCase):
+    def test_agent_loop_runner_keeps_run_only_loop_compatible(self):
+        loop = RunOnlyLoop()
+        runner = AgentLoopNodeRunner(loop)
+
+        runner.bind_run_state(object(), object())
+
+        self.assertFalse(hasattr(loop, "_run_state"))
+
+    def test_agent_loop_runner_uses_public_state_binding_interface(self):
+        loop = BindableLoopSpy()
+        runner = AgentLoopNodeRunner(loop)
+        run_state = object()
+        recorder = object()
+
+        runner.bind_run_state(run_state, recorder)
+
+        self.assertEqual(loop.bind_calls, [(run_state, recorder)])
+
     def test_loader_builds_workflow_definition_from_dict(self):
         workflow = WorkflowLoader().load_dict(build_workflow_dict())
 

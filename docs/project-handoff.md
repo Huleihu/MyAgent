@@ -90,22 +90,25 @@
 
 - 已有标准化 Tool Calling 框架：ToolDefinition、ToolRegistry、ToolExecutor、ToolCallResult；
 - 已有多轮 `ReActAgentLoop`，支持 ToolAction、工具执行、observation、FinalAnswerAction；
-- 已有 `LLMPlanner` 与 `ModelClient` 抽象，真实模型 SDK 尚未接入；
-- 工具调用 Trace 已由 `ToolExecutor + TraceRecorder` 写入 Session。
+- 已有独立 `PlanAndExecuteAgentLoop`，支持任务计划、步骤状态、显式完成/跳过/终止、失败后重试与反思摘要；
+- 已有 `TaskPlanner`、`StepPlanner`、`LLMTaskPlanner` 与 `LLMStepPlanner`，并继续保留 ReAct 的 `Planner` 与 `LLMPlanner`；
+- `ModelClient` 已有 DeepSeek 适配器，自动化测试使用 FakeModelClient；
+- 工具调用 Trace 优先由 `ToolExecutor + TraceRecorder` 写入 Session；Plan Loop 会保证当前 Session 至少拥有本次结果，并可通过步骤 `tool_call_ids` 重建完整历史；
+- PlanState、限制和 retry 已接入 RunState 与 SQLite Checkpoint 跨实例恢复。
+- 独立 Code Review 已补强顺序状态不变量、五个 phase 恢复测试、旧 Trace 重放、Planner 精确字段与 JSON 持久化边界。
 
 主要缺口：
 
-- Plan-and-Execute 还没有独立计划模型，例如任务拆解、步骤列表、步骤状态；
-- 失败重试当前没有策略对象，工具失败只作为 observation 返回；
-- 反思修正还没有独立动作或 Planner 协议；
 - MCP 扩展尚未实现，目前只有本地 Tool 抽象和 FunctionTool；
-- 真实 LLM SDK 适配器尚未实现。
+- 计划步骤当前顺序执行，不支持并行、条件 DAG 或动态计划版本；
+- 工具执行保证仍为 at-least-once，有副作用工具需要基于稳定 call ID 实现幂等；
+- Web Demo 尚未默认切换到 Plan-and-Execute，由装配层按工作流选择 Loop。
 
 建议下一步：
 
-- 在 Runtime Trace 稳住之后，新增轻量 Plan-and-Execute 数据模型与 Planner；
-- 失败重试先做简单策略，例如最大重试次数和可重试错误类型；
-- MCP 适配等本地 Tool + Runtime + Trace 跑通后再接。
+- 后续 MCP 通过 Tool 适配器注册到 `ToolRegistry`，不修改 Plan-and-Execute 编排层；
+- 如需扩展复杂计划，再独立设计并行步骤、条件路由和动态重规划；
+- 有副作用工具优先补 call ID 幂等结果缓存，再讨论 exactly-once 或 Outbox。
 
 #### 目标四：State、Memory、Checkpoint、Trace 与 Eval 数据
 

@@ -15,6 +15,7 @@ from my_agent.core.errors import (
     ToolValidationError,
 )
 from my_agent.core.interfaces import Tool
+from my_agent.core.json_value import validate_json_native
 from my_agent.state.trace import ToolTraceRecord
 from my_agent.tools.registry import ToolRegistry
 from my_agent.tools.schema import ToolCallRequest, ToolCallResult
@@ -36,6 +37,12 @@ class ToolExecutor:
             data = tool.run(request.arguments)
             if not isinstance(data, dict):
                 raise ToolExecutionError("tool must return a dict")
+            try:
+                validate_json_native(data)
+            except ValueError as error:
+                raise ToolExecutionError(
+                    "tool result must be JSON-serializable"
+                ) from error
 
             result = ToolCallResult.success_result(
                 name=request.name,

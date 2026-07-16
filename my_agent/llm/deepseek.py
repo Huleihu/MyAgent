@@ -36,12 +36,13 @@ class DeepSeekModelClient:
         request = {
             "model": self._config.model_name,
             "messages": provider_messages,
-            "tools": provider_tools,
-            "tool_choice": "auto",
             "stream": False,
             "extra_body": {"thinking": {"type": "disabled"}},
             "temperature": self._config.temperature,
         }
+        if provider_tools:
+            request["tools"] = provider_tools
+            request["tool_choice"] = "auto"
         if self._config.max_tokens is not None:
             request["max_tokens"] = self._config.max_tokens
         try:

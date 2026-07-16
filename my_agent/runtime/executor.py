@@ -84,7 +84,7 @@ class RuntimeExecutor:
                 )
                 if context.run_state is not None:
                     context.run_state.status = __import__("my_agent.state.run_state", fromlist=["RunStatus"]).RunStatus.FAILED
-                    context.run_state.error = {"type": exc.__class__.__name__, "message": str(exc)}
+                    context.run_state.error = self._serialize_error(exc)
                     self._sync_run_state(context)
                     if self._checkpoint_recorder is not None:
                         self._checkpoint_recorder.record({"reason": "run_failed"})
@@ -143,8 +143,7 @@ class RuntimeExecutor:
             output=None,
             success=False,
             error={
-                "type": error.__class__.__name__,
-                "message": str(error),
+                **self._serialize_error(error),
             },
             duration_ms=self._elapsed_ms(started_at),
         )
@@ -152,3 +151,14 @@ class RuntimeExecutor:
     def _elapsed_ms(self, started_at: float) -> float:
         """计算节点执行耗时，单位为毫秒。"""
         return (perf_counter() - started_at) * 1000
+
+    def _serialize_error(self, error: Exception) -> dict[str, str]:
+        """保留领域异常的稳定 code，避免失败 Checkpoint 丢失诊断信息。"""
+        payload = {
+            "type": error.__class__.__name__,
+            "message": str(error),
+        }
+        error_code = getattr(error, "code", None)
+        if isinstance(error_code, str) and error_code.strip():
+            payload["code"] = error_code
+        return payload

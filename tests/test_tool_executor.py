@@ -144,6 +144,48 @@ class ToolExecutorTest(unittest.TestCase):
         self.assertEqual(result.error["type"], "ToolExecutionError")
         self.assertIn("must return a dict", result.error["message"])
 
+    def test_execute_returns_failure_for_non_serializable_nested_result(self):
+        registry = build_registry_with_tool(
+            FunctionTool(
+                name="debug.invalid_nested_return",
+                description="用于验证嵌套返回值可持久化",
+                parameters={"type": "object", "properties": {}},
+                func=lambda _arguments: {"items": {"not-json"}},
+            )
+        )
+
+        result = ToolExecutor(registry).execute(
+            ToolCallRequest(
+                name="debug.invalid_nested_return",
+                arguments={},
+                call_id="call-invalid-result",
+            )
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error["type"], "ToolExecutionError")
+        self.assertEqual(
+            result.error["message"],
+            "tool result must be JSON-serializable",
+        )
+
+    def test_execute_rejects_result_that_json_would_coerce(self):
+        registry = build_registry_with_tool(
+            FunctionTool(
+                name="debug.coercing_return",
+                description="用于验证 JSON 类型不被静默转换",
+                parameters={"type": "object", "properties": {}},
+                func=lambda _arguments: {"items": (1, 2)},
+            )
+        )
+
+        result = ToolExecutor(registry).execute(
+            ToolCallRequest(name="debug.coercing_return", arguments={})
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error["type"], "ToolExecutionError")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from my_agent.core.json_value import validate_json_native
 from my_agent.runtime.trace import NodeExecutionRecord
+from my_agent.state.plan_state import (
+    PlanState,
+    PlanStateConsistencyError,
+    PlanStatus,
+)
 from my_agent.state.session import SessionMessage
 from my_agent.state.trace import ToolTraceRecord
 
@@ -37,6 +43,7 @@ class PendingToolCall:
             raise ValueError("tool_name must be a non-empty string")
         if not isinstance(self.arguments, dict):
             raise ValueError("arguments must be a dict")
+        validate_json_native(self.arguments)
         if not isinstance(self.call_id, str) or not self.call_id.strip():
             raise ValueError("call_id must be a non-empty string")
 
@@ -88,6 +95,7 @@ class RunState:
     created_at_utc: str = field(default_factory=lambda: _utc_now())
     updated_at_utc: str = field(default_factory=lambda: _utc_now())
     error: dict[str, Any] | None = None
+    plan_state: PlanState | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("run_id", "session_id", "workflow_id", "user_input"):
@@ -125,9 +133,139 @@ class RunState:
             raise ValueError("error must be a dict or None")
         if not isinstance(self.tool_trace_start_index, int) or self.tool_trace_start_index < 0:
             raise ValueError("tool_trace_start_index must be a non-negative integer")
+        if self.plan_state is not None and not isinstance(self.plan_state, PlanState):
+            raise TypeError("plan_state must be a PlanState or None")
+        self.validate_consistency()
+
+    def validate_consistency(self) -> None:
+        """校验 Plan phase、计划状态、当前步骤与 pending 调用的组合。"""
+        phase = self.cursor.agent_phase
+        if self.plan_state is None:
+            if phase.startswith("plan_") and phase != "plan_creating":
+                raise PlanStateConsistencyError("plan phase requires plan_state")
+            if phase == "plan_creating" and self.pending_tool_call is not None:
+                raise PlanStateConsistencyError(
+                    "plan_creating must not have pending_tool_call"
+                )
+            if phase == "plan_creating" and self.status is RunStatus.COMPLETED:
+                raise PlanStateConsistencyError(
+                    "plan_creating cannot have completed RunStatus"
+                )
+            return
+
+        plan = self.plan_state
+        plan.validate()
+        allowed_phases = {
+            "plan_step_deciding",
+            "plan_tool_pending",
+            "plan_finalizing",
+            "plan_final_answer_written",
+            "completed",
+        }
+        if phase not in allowed_phases:
+            raise PlanStateConsistencyError(
+                "plan_state requires a Plan-and-Execute phase"
+            )
+        if phase != "completed" and self.status is RunStatus.COMPLETED:
+            raise PlanStateConsistencyError(
+                "active plan phase cannot have completed RunStatus"
+            )
+        if phase == "plan_step_deciding":
+            self._validate_plan_step_deciding(plan)
+            return
+        if phase == "plan_tool_pending":
+            self._validate_plan_tool_pending(plan)
+            return
+        if self.pending_tool_call is not None:
+            raise PlanStateConsistencyError(
+                "pending_tool_call is only allowed in plan_tool_pending"
+            )
+        if phase == "plan_finalizing":
+            if plan.status not in {PlanStatus.FINALIZING, PlanStatus.ABORTED}:
+                raise PlanStateConsistencyError(
+                    "plan_finalizing requires finalizing or aborted plan"
+                )
+            return
+        if phase == "plan_final_answer_written":
+            if plan.status not in {PlanStatus.COMPLETED, PlanStatus.ABORTED}:
+                raise PlanStateConsistencyError(
+                    "plan_final_answer_written requires completed or aborted plan"
+                )
+            self._validate_plan_final_message(plan)
+            return
+        if self.status is not RunStatus.COMPLETED:
+            raise PlanStateConsistencyError(
+                "completed agent phase requires completed RunStatus"
+            )
+        if plan.status not in {PlanStatus.COMPLETED, PlanStatus.ABORTED}:
+            raise PlanStateConsistencyError(
+                "completed agent phase requires completed or aborted plan"
+            )
+        self._validate_plan_final_message(plan)
+
+    def _validate_plan_step_deciding(self, plan: PlanState) -> None:
+        """校验步骤决策阶段已经具备全部 observation。"""
+        if plan.status is not PlanStatus.RUNNING:
+            raise PlanStateConsistencyError(
+                "plan_step_deciding requires running plan"
+            )
+        if self.pending_tool_call is not None:
+            raise PlanStateConsistencyError(
+                "plan_step_deciding must not have pending_tool_call"
+            )
+        trace_call_ids = {
+            trace.call_id for trace in self.tool_traces if trace.call_id is not None
+        }
+        if any(
+            call_id not in trace_call_ids
+            for call_id in plan.current_step().tool_call_ids
+        ):
+            raise PlanStateConsistencyError(
+                "plan_step_deciding requires traces for all step tool calls"
+            )
+
+    def _validate_plan_tool_pending(self, plan: PlanState) -> None:
+        """校验待执行工具调用与当前步骤的关联。"""
+        if plan.status is not PlanStatus.RUNNING:
+            raise PlanStateConsistencyError("plan_tool_pending requires running plan")
+        if self.pending_tool_call is None:
+            raise PlanStateConsistencyError(
+                "plan_tool_pending requires pending_tool_call"
+            )
+        call_ids = plan.current_step().tool_call_ids
+        if not call_ids or call_ids[-1] != self.pending_tool_call.call_id:
+            raise PlanStateConsistencyError(
+                "pending call must match the current step's latest call ID"
+            )
+        trace_call_ids = {
+            trace.call_id for trace in self.tool_traces if trace.call_id is not None
+        }
+        if any(call_id not in trace_call_ids for call_id in call_ids[:-1]):
+            raise PlanStateConsistencyError(
+                "plan_tool_pending requires traces for earlier step tool calls"
+            )
+
+    def _validate_plan_final_message(self, plan: PlanState) -> None:
+        """校验当前 run 只有一条可恢复的计划最终回答。"""
+        final_messages = [
+            message
+            for message in self.messages
+            if message.role == "assistant"
+            and message.metadata.get("message_type") == "plan_final_answer"
+            and message.metadata.get("run_id") == self.run_id
+            and message.metadata.get("plan_id") == plan.plan_id
+        ]
+        if len(final_messages) != 1:
+            raise PlanStateConsistencyError(
+                f"agent_phase='{self.cursor.agent_phase}' with "
+                f"PlanStatus='{plan.status.value}' requires exactly one plan "
+                f"final answer for run_id='{self.run_id}' and "
+                f"plan_id='{plan.plan_id}'; found {len(final_messages)}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """转换为仅由 JSON 基础类型组成的持久化数据。"""
+        self.validate_consistency()
         return {
             "run_id": self.run_id,
             "session_id": self.session_id,
@@ -183,6 +321,9 @@ class RunState:
             "created_at_utc": self.created_at_utc,
             "updated_at_utc": self.updated_at_utc,
             "error": deepcopy(self.error),
+            "plan_state": None
+            if self.plan_state is None
+            else self.plan_state.to_dict(),
         }
 
     @classmethod
@@ -192,6 +333,7 @@ class RunState:
             raise TypeError("payload must be a dict")
         cursor_payload = payload["cursor"]
         pending_payload = payload.get("pending_tool_call")
+        plan_payload = payload.get("plan_state")
         return cls(
             run_id=payload["run_id"],
             session_id=payload["session_id"],
@@ -211,6 +353,9 @@ class RunState:
             created_at_utc=payload["created_at_utc"],
             updated_at_utc=payload["updated_at_utc"],
             error=deepcopy(payload.get("error")),
+            plan_state=(
+                None if plan_payload is None else PlanState.from_dict(plan_payload)
+            ),
         )
 
 

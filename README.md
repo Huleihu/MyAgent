@@ -175,6 +175,25 @@ $env:MYAGENT_LLM_MODEL="deepseek-v4-flash"
 ```
 
 当前 MVP 固定关闭 Thinking，并且每轮只支持一个工具调用。自动化测试注入 Fake SDK，不会调用 DeepSeek 或产生费用。可选真实冒烟测试仅应在本地设置密钥后，手动启动后端并发送一次聊天请求。
+
+# Plan-and-Execute Runtime
+
+项目现已提供与 `ReActAgentLoop` 并列的 `PlanAndExecuteAgentLoop`。它通过 `TaskPlanner` 创建任务计划和生成整个计划的最终回答，通过 `StepPlanner` 决定当前步骤继续调用工具、完成、跳过或终止计划。工具成功只产生 observation，不会自动把步骤标记为完成。
+
+计划状态由 `PlanState` 和 `PlanStep` 保存，并作为可选字段进入现有 `RunState` 与 SQLite Checkpoint。Loop 独占以下控制权：
+
+- 为每次新工具调用生成稳定 `call_id`；
+- 维护步骤 attempt、retry 和全局调用限制；
+- 推进 `PlanStatus`、`agent_phase`、`current_step_id` 与 `pending_tool_call`；
+- 根据步骤终态计算 `succeeded / partial / failed`；
+- 在恢复时继续使用 Checkpoint 中持久化的限制。
+
+同一步骤通过有序 `tool_call_ids` 关联完整工具历史；具体参数和结果仍只保存在 Tool Trace 中。同一 call ID 因 at-least-once 重放产生多条 Trace 时，StepPlanner 使用最新的已持久化 observation。
+
+`LLMTaskPlanner` 与 `LLMStepPlanner` 基于项目 `ModelClient` 协议实现，可注入 DeepSeek 或 FakeModelClient。模型只能提出计划定义、工具名称与参数或步骤终态动作，不能控制 call ID、计数、限制和持久化状态。当前 Web Demo 不默认切换到 Plan-and-Execute，装配层可按工作流需要注入对应 Loop。
+
+当前仍不支持并行计划步骤和真实 MCP。后续 MCP 仅需适配为标准 Tool 并注册到 `ToolRegistry`，Plan-and-Execute 不感知工具来源。有副作用的工具必须基于稳定 call ID 自行实现幂等，因为工具成功后、observation 落盘前崩溃仍可能导致恢复时重复执行。
+
 # Runtime Checkpoint 恢复
 
 Web 服务默认使用 SQLite Checkpoint。可通过 `MYAGENT_CHECKPOINT_DB_PATH` 指定数据库文件；未设置时使用工作目录下的 `.myagent/checkpoints.sqlite3`。数据库父目录会自动创建，应用关闭时会关闭自己创建的连接。

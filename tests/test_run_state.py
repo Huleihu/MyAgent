@@ -16,6 +16,16 @@ from my_agent.state.trace import ToolTraceRecord
 
 
 class RunStateTest(unittest.TestCase):
+    def test_pending_tool_call_rejects_non_json_native_arguments(self):
+        for arguments in ({"items": (1, 2)}, {7: "integer-key"}):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    PendingToolCall(
+                        tool_name="calculator.add",
+                        arguments=arguments,
+                        call_id="call-1",
+                    )
+
     def test_round_trip_preserves_recoverable_runtime_data(self):
         state = RunState(
             run_id="run-1",

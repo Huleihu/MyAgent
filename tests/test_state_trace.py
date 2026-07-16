@@ -9,6 +9,19 @@ from my_agent.state.trace import ToolTraceRecord
 
 
 class StateTraceTest(unittest.TestCase):
+    def test_tool_trace_rejects_non_json_native_nested_values(self):
+        with self.assertRaises(ValueError):
+            ToolTraceRecord(
+                trace_id="trace-invalid",
+                tool_name="debug.invalid",
+                call_id="call-invalid",
+                arguments={"items": (1, 2)},
+                success=True,
+                result={"value": 1},
+                error=None,
+                duration_ms=1,
+            )
+
     def test_tool_trace_record_keeps_success_call_details(self):
         trace = ToolTraceRecord(
             trace_id="trace-1",
